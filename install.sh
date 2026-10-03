@@ -15,8 +15,9 @@
 #            lighter; use it for smooth playback on a Pi Zero, 2 or 3. Works on
 #            Raspberry Pi OS Lite, or on a desktop install (the desktop is then
 #            turned off at boot; switch back with --desktop).
-# The first install picks lite on Raspberry Pi OS Lite and desktop otherwise;
-# later runs keep whichever mode is installed.
+# Without --lite / --desktop it picks lite on a Pi 3B+ or older (they can't play
+# smoothly through the desktop) and on Raspberry Pi OS Lite, and desktop
+# otherwise. A mode chosen with --lite / --desktop is remembered by later runs.
 #
 # Options:
 #   --lite           use lite mode (see above)
@@ -43,6 +44,9 @@ APPS_DIR="$HOME/.local/share/applications"
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
 VIDEOS_DIR="$HOME/Videos"
 VENV="$HOME/venv"
+MODE_FILE="$HOME/.config/osc-vlc-player/mode"  # mode chosen with --lite / --desktop
+# Pi 1, 2, 3 (incl. 3B+), Zero, Zero 2 W, CM1, CM3: too slow for video on the desktop
+OLDER_PI='Pi (Model|Zero|2 |3 )|Compute Module (Rev|3)'
 # kernel options for lite mode: no console blanking, cursor or boot logo
 CMDLINE_OPTIONS=(consoleblank=0 vt.global_cursor_default=0 logo.nologo)
 
@@ -109,6 +113,7 @@ if $UNINSTALL; then
           "$DESKTOP_DIR"/osc-vlc-player-{launcher,stop}.desktop
     # don't delete the script if this folder *is* the home folder
     [ "$SRC" = "$HOME" ] || rm -f "$HOME/osc_vlc_player.py"
+    rm -rf "$(dirname "$MODE_FILE")"
     systemctl --user daemon-reload 2>/dev/null || true
     note "Done. Kept your videos in $VIDEOS_DIR, the Python environment in $VENV"
     note "(remove it with: rm -rf ~/venv) and the boot / screen blanking settings."
@@ -121,24 +126,33 @@ done
 
 # --- mode ---------------------------------------------------------------------
 
-if [ -z "$MODE" ]; then
-    if systemctl --user is-enabled --quiet "$SERVICE" 2> /dev/null; then
-        MODE=lite       # already installed in lite mode
-    elif [ -f "$AUTOSTART_DIR/osc-vlc-player.desktop" ]; then
-        MODE=desktop    # already installed in desktop mode
-    elif desktop_installed; then
-        MODE=desktop
-    else
-        MODE=lite
-    fi
+SAVED_MODE=""
+[ -r "$MODE_FILE" ] && SAVED_MODE="$(cat "$MODE_FILE")"
+if [ -n "$MODE" ]; then
+    WHY="chosen with --$MODE"
+elif [ "$SAVED_MODE" = lite ] || [ "$SAVED_MODE" = desktop ]; then
+    MODE="$SAVED_MODE"; WHY="chosen earlier with --$MODE"
+elif [[ "$MODEL" =~ $OLDER_PI ]]; then
+    MODE=lite; WHY="recommended for this model; use --desktop to override"
+elif systemctl --user is-enabled --quiet "$SERVICE" 2> /dev/null; then
+    MODE=lite; WHY="already installed in lite mode"
+elif [ -f "$AUTOSTART_DIR/osc-vlc-player.desktop" ]; then
+    MODE=desktop; WHY="already installed in desktop mode"
+elif desktop_installed; then
+    MODE=desktop; WHY="desktop found"
+else
+    MODE=lite; WHY="no desktop found"
 fi
 if [ "$MODE" = desktop ] && ! desktop_installed; then
     die "desktop mode needs Raspberry Pi OS with desktop; this looks like Lite (use --lite)"
 fi
 if [ "$MODE" = lite ]; then
-    echo "Mode: lite (no desktop; the player starts at boot and draws straight to the screen)"
+    echo "Mode: lite, $WHY (no desktop; the player starts at boot and draws straight to the screen)"
 else
-    echo "Mode: desktop (the player runs fullscreen on the desktop)"
+    echo "Mode: desktop, $WHY (the player runs fullscreen on the desktop)"
+fi
+if [[ "$WHY" == "chosen with"* ]]; then
+    mkdir -p "$(dirname "$MODE_FILE")" && echo "$MODE" > "$MODE_FILE"
 fi
 
 # --- system settings (sudo) -----------------------------------------------------

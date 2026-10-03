@@ -106,6 +106,9 @@ AB_POLL_SECONDS = 0.05
 # on screen, so it's re-sent this long after a new video window appears.
 FULLSCREEN_DELAY_SECONDS = 0.5
 
+# Warn if a video has been playing this long without VLC managing to show it.
+NO_PICTURE_SECONDS = 5
+
 # What each Raspberry Pi can decode smoothly: codec -> (max width, max height, max fps).
 # Anything else falls back to software decoding and will stutter (or worse).
 DECODE_LIMITS = {
@@ -362,6 +365,9 @@ class VideoController:
         self._ab_index = -1   # playlist index the loop belongs to
         self.board_model, self.board = detect_board()
         self._checked_index = None  # last playlist index checked against the board
+        self._no_picture_for = 0.0  # seconds played without a picture
+        self._picture_checked_at = time.monotonic()
+        self._picture_warned = False
         self._closing = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch, daemon=True)
         self._watch_thread.start()
@@ -568,6 +574,29 @@ class VideoController:
             self._check_ab()
             self._check_fullscreen()
             self._check_media()
+            self._check_picture()
+
+    @locked
+    def _check_picture(self):
+        """Warn once if a video plays but VLC couldn't open the screen to show it."""
+        now = time.monotonic()
+        last, self._picture_checked_at = self._picture_checked_at, now
+        state = self.player.get_state()
+        if self.player.has_vout() or state == vlc.State.Paused or not self._output_open:
+            self._no_picture_for = 0.0
+            if self.player.has_vout():
+                self._picture_warned = False
+            return
+        # Add up only time spent playing; the brief stopped / opening moments
+        # between videos neither count nor reset it, so a playlist of short
+        # clips that never shows a picture is still caught.
+        if state == vlc.State.Playing:
+            self._no_picture_for += now - last
+        if self._no_picture_for >= NO_PICTURE_SECONDS and not self._picture_warned:
+            self._picture_warned = True
+            print("warning: the video is playing but VLC couldn't open the screen to "
+                  "show it. Without a desktop this usually means one is still running "
+                  "(reboot after install.sh --lite). Run with --debug for VLC's messages.")
 
     @locked
     def _check_media(self):
@@ -909,16 +938,21 @@ def main():
     if not files:
         sys.exit("no video files found")
 
-    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"):
-        print("desktop session found: playing in a fullscreen window")
-    else:
-        print("no desktop session: VLC draws straight to the screen")
     init_x11_threads()
     vlc_args = [
         "--no-video-title-show",   # don't overlay the filename on each video
         "--mouse-hide-timeout=0",
         "-vv" if args.debug else "--quiet",
     ]
+    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"):
+        print("desktop session found: playing in a fullscreen window")
+    else:
+        # Without a desktop, ask for the Raspberry Pi VLC's direct-to-screen
+        # output by name. Otherwise, if it can't open the screen, VLC quietly
+        # falls back to drawing the video as coloured text ("caca"), which is
+        # unwatchably slow. (A --vout in --vlc-args overrides this.)
+        print("no desktop session: VLC draws straight to the screen (drm_vout)")
+        vlc_args.append("--vout=drm_vout")
     aspect = resolve_aspect(args.aspect)
     if aspect:
         print(f"stretching videos to fill the screen (aspect {aspect})")

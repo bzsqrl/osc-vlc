@@ -58,17 +58,25 @@ switch at any time.
 | **Recommended for** | Pi 4 / 5, if you want the desktop | Pi Zero, 2 and 3, and any unattended player |
 
 On a **Pi Zero, 2 or 3, use Lite mode**: going through the desktop drops
-frames even with videos those models can play.
+frames even with videos those models can play. The installer picks it for
+you on these models.
 
-The installer uses Lite mode on Raspberry Pi OS Lite and Desktop mode on the
-desktop version. To choose:
+The installer chooses the mode like this:
+- **Pi 3B+ and older** (Pi 1, 2, 3, Zero, Zero 2 W): Lite mode, even if the
+  desktop is installed. The desktop is turned off at boot.
+- **Pi 4 and 5:** Desktop mode if the desktop is installed, otherwise Lite.
+
+To choose for yourself:
 - `bash install.sh --lite` switches to Lite mode, even on a desktop install. It
   sets the Pi to boot to the text console instead of the desktop, so there's no
   need to reinstall the OS.
-- `bash install.sh --desktop` switches back. The desktop returns at the next
-  boot.
+- `bash install.sh --desktop` switches to Desktop mode, e.g. to keep the
+  desktop on a Pi 3. The desktop returns at the next boot.
 
-The installer remembers the mode, so later runs (e.g. to update) keep it.
+A mode chosen with `--lite` or `--desktop` is remembered, so later runs (e.g.
+to update) keep it. Without one, the rules above apply each time. So rerunning
+the installer on a Pi 3 that was set up in Desktop mode by an older version of
+the installer switches it to Lite, unless you add `--desktop`.
 
 ### Quick install
 1. **Copy the player files to a folder on the Pi:** `install.sh`,
@@ -198,9 +206,12 @@ New videos are picked up when the player restarts.
 - **Which mode is it running in?** The log's first lines say
   `desktop session found: playing in a fullscreen window` or
   `no desktop session: VLC draws straight to the screen`.
-- **Lite mode, no picture:** check the log. If the desktop is still running
-  (e.g. right after switching with `--lite`), reboot first: while the desktop
-  is up, VLC can't use the screen.
+- **Lite mode, no picture:** the log says `warning: the video is playing but
+  VLC couldn't open the screen to show it`. Usually the desktop is still
+  running (e.g. right after switching with `--lite`): reboot. While the desktop
+  is up, VLC can't use the screen. In Lite mode the player always uses VLC's
+  direct output (`drm_vout`); to try a different one, add e.g.
+  `--vlc-args "--vout=any"` to the `ExecStart=` line.
 - **Desktop mode, no picture, or not fullscreen:** edit `~/.config/systemd/user/osc-vlc-player.service`,
   remove the `#` from `#UnsetEnvironment=WAYLAND_DISPLAY`, then run
   `systemctl --user daemon-reload` and restart the player.
@@ -395,7 +406,7 @@ videos to suit the *oldest* Pi that will play them:
 
 | Model | Best format | Limit |
 |---|---|---|
-| Pi Zero / Zero W | H.264, **720p**, 30 fps, ≤ 8 Mbps | H.264 up to 1080p30 in Lite mode; the single-core CPU and 512 MB RAM struggle with the desktop |
+| Pi Zero / Zero W | H.264, 1080p, 30 fps, **Lite mode** | H.264 up to 1080p30 in Lite mode (tested on a Zero W). Through the desktop, playback is far too slow |
 | Pi Zero 2 W, Pi 2, Pi 3 / 3B+ | H.264, 1080p, 30 fps, ≤ 20 Mbps | H.264 up to 1080p30. **No HEVC/H.265**: 4K or HEVC files will stutter badly or crash |
 | Pi 4 / 400 | HEVC (H.265), up to 4K 60 fps, **level 5.1**, ≤ 60 Mbps; or H.264 up to 1080p60 | H.264 is limited to 1080p; HEVC above level 5.1 can crash VLC |
 | Pi 5 / 500 | Same as Pi 4 | H.264 is decoded by the CPU (fine up to 1080p60) |
@@ -409,9 +420,9 @@ also name the detected model and its limits. To check:
 journalctl --user -u osc-vlc-player | grep -iE "warning|Raspberry Pi"
 ```
 
-**Lite mode on older Pis:** on a Pi Zero, 2 or 3, use Lite mode (section 1,
-*Desktop or Lite*). Even within these limits, playing through the desktop
-drops frames on these models.
+**Lite mode on older Pis:** on a Pi Zero, 2 or 3, the installer uses Lite
+mode automatically (section 1, *Desktop or Lite*). Even within these limits,
+playing through the desktop drops frames on these models.
 
 **Mixing formats:** a playlist can mix formats, for example 1080p30 H.264 and
 4K60 HEVC. At each change of format, the screen briefly shows the desktop
@@ -425,11 +436,11 @@ editing software with the settings in the table. To convert an existing file
 with [ffmpeg](https://ffmpeg.org) instead:
 
 ```bash
-# Pi Zero: 720p30 H.264
+# Smaller files: 720p30 H.264
 ffmpeg -i input.mp4 -map 0:v:0 -map 0:a? -vf "scale=1280:720,fps=30" -c:v libx264 -preset slow -crf 22 \
   -maxrate 8M -bufsize 16M -pix_fmt yuv420p -c:a aac -b:a 160k -movflags +faststart output.mp4
 
-# Pi Zero 2 W / 2 / 3: 1080p30 H.264
+# Pi Zero / Zero 2 W / 2 / 3: 1080p30 H.264
 ffmpeg -i input.mp4 -map 0:v:0 -map 0:a? -vf "scale=1920:1080,fps=30" -c:v libx264 -preset slow -crf 20 \
   -profile:v high -level 4.1 -maxrate 20M -bufsize 40M -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart output.mp4
 
@@ -448,8 +459,7 @@ screen (see *Picture shape* in section 1).
   `/boot/firmware/config.txt`, then reboot. Without it, 4K output is limited to
   30 Hz. The Pi 5 doesn't need this.
 - **Pi Zero / Zero W / Zero 2 W:** 512 MB of RAM is tight for the desktop plus
-  VLC, so use Lite mode. Keep videos at 720p (Zero / Zero W) or 1080p30
-  (Zero 2 W). They have a mini-HDMI port, so you need an adapter.
+  VLC, so they use Lite mode. Keep videos to 1080p30 H.264. They have a mini-HDMI port, so you need an adapter.
 - **Pi 2, Pi 3 and the Zeros:** use Lite mode for smooth playback. It also
   starts the video much sooner after boot.
 - **Two screens (Pi 4 / 5):** the player stretches to fit the first screen it
