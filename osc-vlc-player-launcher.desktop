@@ -1,0 +1,13 @@
+[Desktop Entry]
+# Menu / desktop launcher: starts the video player again after it has been
+# quit, without rebooting. If it's already running, it restarts it.
+#
+# Menu (Sound & Video):  cp osc-vlc-player-launcher.desktop ~/.local/share/applications/
+# Desktop icon:          cp osc-vlc-player-launcher.desktop ~/Desktop/
+Type=Application
+Name=Video Player (OSC)
+Comment=Start or restart the OSC/GPIO video player
+Icon=vlc
+Categories=AudioVideo;Video;Player;
+Exec=sh -c "systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY; systemctl --user restart osc-vlc-player.service"
+Terminal=false

@@ -1,0 +1,10 @@
+# Test videos: far too big for GitHub (100 MB per-file limit)
+videos/
+*.mp4
+*.mkv
+*.mov
+
+# Python
+__pycache__/
+*.pyc
+venv/

@@ -1,0 +1,4 @@
+# Keep Unix line endings even when cloned on Windows: bash, systemd and the
+# desktop read these files on the Pi, and install.sh won't run with CRLF.
+* text=auto eol=lf
+*.tosc binary

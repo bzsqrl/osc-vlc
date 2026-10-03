@@ -1,0 +1,10 @@
+[Desktop Entry]
+# Autostart entry: copy to ~/.config/autostart/
+# Passes this desktop session's display to systemd, then starts the player
+# service (see osc-vlc-player.service).
+Type=Application
+Name=OSC VLC Player
+Comment=Start the OSC/GPIO video player on this desktop
+Exec=sh -c "systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY; systemctl --user restart osc-vlc-player.service"
+Terminal=false
+NoDisplay=true

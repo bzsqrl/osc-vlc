@@ -1,0 +1,14 @@
+[Desktop Entry]
+# Menu / desktop launcher: quits the video player. It stays quit (the service
+# only restarts it after a crash) until you start it again with
+# "Video Player (OSC)" or reboot.
+#
+# Menu (Sound & Video):  cp osc-vlc-player-stop.desktop ~/.local/share/applications/
+# Desktop icon:          cp osc-vlc-player-stop.desktop ~/Desktop/
+Type=Application
+Name=Stop Video Player (OSC)
+Comment=Quit the OSC/GPIO video player
+Icon=media-playback-stop
+Categories=AudioVideo;Video;Player;
+Exec=systemctl --user stop osc-vlc-player.service
+Terminal=false
