@@ -27,6 +27,8 @@ Built on VLC ([python-vlc](https://pypi.org/project/python-vlc/)) and
 | `osc_vlc_player.tosc` | TouchOSC layout (section 2) |
 | `build_touchosc_layout.py` | Generates the TouchOSC layout |
 
+Released under the [MIT License](LICENSE).
+
 ---
 
 ## 1. Install
