@@ -59,6 +59,7 @@ GPIO controls (BCM pin numbers, override with --pin-* options):
 import argparse
 import ctypes
 import functools
+import os
 import re
 import subprocess
 import signal
@@ -908,6 +909,10 @@ def main():
     if not files:
         sys.exit("no video files found")
 
+    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"):
+        print("desktop session found: playing in a fullscreen window")
+    else:
+        print("no desktop session: VLC draws straight to the screen")
     init_x11_threads()
     vlc_args = [
         "--no-video-title-show",   # don't overlay the filename on each video

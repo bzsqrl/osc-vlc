@@ -10,6 +10,8 @@ TouchOSC) and/or with physical buttons and a rotary encoder.
   page that controls them all at once.
 - **Hardware controls:** GPIO buttons and a rotary encoder for seeking.
 - **Unattended use:** starts fullscreen at boot and restarts itself after a crash.
+- **Desktop or Lite:** runs on Raspberry Pi OS with desktop, or without one
+  (Lite) for smooth playback on older Pis.
 - **Pi models:** works on every model from the Pi Zero to the Pi 5, and warns in the log about
   videos a model can't decode smoothly.
 - **One-step install:** run `bash install.sh` on the Pi.
@@ -35,13 +37,38 @@ Released under the [MIT License](LICENSE).
 
 ### Username
 The player works with any username. There is nothing to edit in the files.
-Install it while logged in as the user the Pi's desktop logs in as
-automatically (usually `pi`, or whatever was set in Raspberry Pi Imager). It
-runs as that user and plays that user's `~/Videos` folder. In this guide, `~`
+Install it as your normal user (usually `pi`, or whatever was set in
+Raspberry Pi Imager). It runs as that user and plays that user's `~/Videos` folder. In this guide, `~`
 means that user's home folder, e.g. `/home/pi`.
 
 Run the installer as that user, never with `sudo`. It asks for your password
 itself for the few steps that need it.
+
+### Desktop or Lite
+The player can run in two ways. The installer picks one for you, and you can
+switch at any time.
+
+| | **Desktop mode** | **Lite mode** |
+|---|---|---|
+| **Runs on** | Raspberry Pi OS with desktop | Raspberry Pi OS Lite, or a desktop install with the desktop turned off |
+| **How it shows video** | Fullscreen window on the desktop | Straight to the screen, with no desktop in between |
+| **Playback** | Smooth on a Pi 4 / 5 | Smooth on every model: lighter and faster |
+| **Starts at boot** | Once the desktop has logged in | Straight away, no login needed |
+| **Desktop menu entries** | Yes | No (use TouchOSC or the commands below) |
+| **Recommended for** | Pi 4 / 5, if you want the desktop | Pi Zero, 2 and 3, and any unattended player |
+
+On a **Pi Zero, 2 or 3, use Lite mode**: going through the desktop drops
+frames even with videos those models can play.
+
+The installer uses Lite mode on Raspberry Pi OS Lite and Desktop mode on the
+desktop version. To choose:
+- `bash install.sh --lite` switches to Lite mode, even on a desktop install. It
+  sets the Pi to boot to the text console instead of the desktop, so there's no
+  need to reinstall the OS.
+- `bash install.sh --desktop` switches back. The desktop returns at the next
+  boot.
+
+The installer remembers the mode, so later runs (e.g. to update) keep it.
 
 ### Quick install
 1. **Copy the player files to a folder on the Pi:** `install.sh`,
@@ -63,9 +90,10 @@ itself for the few steps that need it.
    They play in alphabetical order, so prefix names with numbers to set the order
    (`01-intro.mp4`, `02-main.mp4`, ...). Which formats play smoothly depends
    on the Pi model; see **section 5**.
-4. **Reboot** (`sudo reboot`). The player starts fullscreen once the desktop
-   loads and plays the whole playlist on a loop. If you ran the installer from
-   the desktop and `~/Videos` already had videos, it's already running.
+4. **Reboot** (`sudo reboot`). The player starts fullscreen and plays the
+   whole playlist on a loop: in Desktop mode once the desktop loads, in Lite
+   mode straight after boot. If `~/Videos` already had videos, the installer
+   has started it already, unless it said a reboot is needed.
 
 At the end, the installer prints the settings for TouchOSC (section 2).
 
@@ -74,22 +102,29 @@ At the end, the installer prints the settings for TouchOSC (section 2).
   `python3-gpiozero`, `python3-lgpio`).
 - **Old version:** removes the system-wide service from an early version of
   the player, if it finds one.
-- **Unattended use:** sets the desktop to log in automatically as you, and
-  turns off screen blanking.
-- **Player files:** copies the script to `~/osc_vlc_player.py`, the service to
-  `~/.config/systemd/user/`, the autostart entry to `~/.config/autostart/`
-  and the menu entries for starting and stopping it to
-  `~/.local/share/applications/`. It removes any
-  Windows line endings on the way.
+- **Unattended use, Desktop mode:** sets the desktop to log in automatically
+  as you, and turns off screen blanking.
+- **Unattended use, Lite mode:** starts the player at boot without anyone
+  logging in. It turns off the desktop at boot if there is one, and hides the
+  text console's cursor, boot logo and blanking (it adds
+  `consoleblank=0 vt.global_cursor_default=0 logo.nologo` to
+  `/boot/firmware/cmdline.txt`).
+- **Player files:** copies the script to `~/osc_vlc_player.py` and the service
+  to `~/.config/systemd/user/`. In Desktop mode it also adds the autostart
+  entry to `~/.config/autostart/` and the menu entries for starting and
+  stopping it to `~/.local/share/applications/`. It removes any Windows line
+  endings on the way.
 - **Python:** creates `~/venv` (or fixes an existing one so it can see
   gpiozero) and installs `python-osc` and `python-vlc` into it.
-- **Start:** starts the player right away if you're on the desktop and there
-  are videos.
+- **Start:** starts the player right away if there are videos (in Desktop
+  mode, only when run from the desktop).
 
 **Options:**
 | Option | Effect |
 |---|---|
-| `--desktop-icon` | Also put the start and stop icons on the desktop |
+| `--lite` | Use Lite mode (see *Desktop or Lite*) |
+| `--desktop` | Use Desktop mode |
+| `--desktop-icon` | Desktop mode: also put the start and stop icons on the desktop |
 | `--4k60` | Pi 4 / 400 only: enable 4K at 60 Hz on HDMI 0 (needs a reboot) |
 | `--no-system` | Skip everything that needs `sudo` |
 | `--uninstall` | Remove the player. Keeps `~/Videos`, `~/venv` and the system settings |
@@ -97,11 +132,11 @@ At the end, the installer prints the settings for TouchOSC (section 2).
 **To update** after changing any of the files, copy the folder over again and
 rerun `bash install.sh`. It's safe to run as often as you like.
 
-### Quit and start it from the desktop
+### Quit and start again
 **To quit**, use any of these:
 - the **QUIT PLAYER** button in TouchOSC (tap it twice)
-- **Sound & Video → Stop Video Player (OSC)** from the menu
-- `systemctl --user stop osc-vlc-player` in a terminal
+- **Sound & Video → Stop Video Player (OSC)** from the menu (Desktop mode)
+- `systemctl --user stop osc-vlc-player` in a terminal or over SSH
 
 The video window's own close button (×) and the taskbar's **Close** do
 nothing. VLC ignores them when another program is controlling it.
@@ -109,7 +144,10 @@ nothing. VLC ignores them when another program is controlling it.
 After quitting, the player stays quit until you start it again or reboot.
 It only restarts by itself after a crash.
 
-**To start it again**, choose **Sound & Video → Video Player (OSC)** from the
+**To start it again in Lite mode**, run `systemctl --user start osc-vlc-player`
+(over SSH, or after logging in at the Pi's console), or reboot.
+
+**To start it again in Desktop mode**, choose **Sound & Video → Video Player (OSC)** from the
 menu, or double-click the desktop icon if you installed it with
 `--desktop-icon`. If the player is already running, this restarts it, which is
 also how to pick up newly added videos. When you double-click a desktop icon,
@@ -135,18 +173,35 @@ Then, in `sudo raspi-config`, set System Options → Boot / Auto Login →
 **Desktop Autologin** and Display Options → Screen Blanking → **Off**, and
 reboot.
 
+For **Lite mode**, skip the three `.desktop` files and the raspi-config
+settings above. Instead, run:
+```bash
+sudo loginctl enable-linger $USER          # start user services at boot
+systemctl --user enable osc-vlc-player
+sudo raspi-config nonint do_boot_behaviour B1   # only on a desktop install: boot to console
+```
+Then add `consoleblank=0 vt.global_cursor_default=0 logo.nologo` to the end of
+the single line in `/boot/firmware/cmdline.txt`, and reboot.
+
 ### Useful commands
 ```bash
 systemctl --user status osc-vlc-player       # is it running?
 systemctl --user restart osc-vlc-player      # restart (e.g. after adding videos)
-systemctl --user stop osc-vlc-player         # stop, to use the desktop
+systemctl --user stop osc-vlc-player         # stop (e.g. to use the desktop)
+systemctl --user start osc-vlc-player        # start again
 journalctl --user -u osc-vlc-player -f       # live log of every command received
 hostname -I                                  # the Pi's IP address, for TouchOSC
 ```
 New videos are picked up when the player restarts.
 
 ### Troubleshooting
-- **No picture, or not fullscreen:** edit `~/.config/systemd/user/osc-vlc-player.service`,
+- **Which mode is it running in?** The log's first lines say
+  `desktop session found: playing in a fullscreen window` or
+  `no desktop session: VLC draws straight to the screen`.
+- **Lite mode, no picture:** check the log. If the desktop is still running
+  (e.g. right after switching with `--lite`), reboot first: while the desktop
+  is up, VLC can't use the screen.
+- **Desktop mode, no picture, or not fullscreen:** edit `~/.config/systemd/user/osc-vlc-player.service`,
   remove the `#` from `#UnsetEnvironment=WAYLAND_DISPLAY`, then run
   `systemctl --user daemon-reload` and restart the player.
 - **Doesn't start at login:** add this line to `~/.config/labwc/autostart`:
@@ -163,12 +218,18 @@ New videos are picked up when the player restarts.
   already guards against this. When the next video's codec, resolution or
   frame rate differs from the current one, it closes VLC's video output and
   starts fresh. The log shows `format change (...): restarting video output`,
-  and the desktop shows for a moment while the window is recreated. Videos in
+  and the desktop (or, in Lite mode, the black text console) shows for a
+  moment while the video output restarts. Videos in
   the same format still switch seamlessly. To restart the output on *every*
   change, add `--clean-switch always` to the end of the `ExecStart=` line
   (as for `--aspect` above). To never restart it, add `--clean-switch never`.
   Matching all your videos' formats avoids the flash entirely; see section 5.
-- **No sound:** pick the output (e.g. HDMI) from the volume icon on the desktop taskbar.
+- **No sound (Desktop mode):** pick the output (e.g. HDMI) from the volume
+  icon on the desktop taskbar.
+- **No sound (Lite mode):** VLC uses the Pi's default sound output. List the
+  outputs with `aplay -l`, then choose one by adding e.g.
+  `--vlc-args "--alsa-audio-device=hw:CARD=vc4hdmi0"` to the `ExecStart=`
+  line, using a card name from that list.
 - **Anything else:** check the log with `journalctl` (above).
 
 ---
@@ -326,7 +387,7 @@ GND, and a KY-040's `+` goes to **3.3V**, never 5V.
 
 The same files and install steps work on every model: Pi Zero / Zero W,
 Zero 2 W, Pi 2, 3, 3B+, 4 (and 400) and 5 (and 500), running the current
-Raspberry Pi OS **Desktop**. Use the OS image that Raspberry Pi Imager offers
+Raspberry Pi OS, with desktop or Lite. Use the OS image that Raspberry Pi Imager offers
 for the chosen board (the 32-bit image on a Pi Zero / Zero W and Pi 2).
 
 What differs is which videos each model can decode smoothly. Encode your
@@ -334,7 +395,7 @@ videos to suit the *oldest* Pi that will play them:
 
 | Model | Best format | Limit |
 |---|---|---|
-| Pi Zero / Zero W | H.264, **720p**, 30 fps, ≤ 8 Mbps | H.264 up to 1080p30, but the single-core CPU and 512 MB RAM struggle with the desktop at 1080p |
+| Pi Zero / Zero W | H.264, **720p**, 30 fps, ≤ 8 Mbps | H.264 up to 1080p30 in Lite mode; the single-core CPU and 512 MB RAM struggle with the desktop |
 | Pi Zero 2 W, Pi 2, Pi 3 / 3B+ | H.264, 1080p, 30 fps, ≤ 20 Mbps | H.264 up to 1080p30. **No HEVC/H.265**: 4K or HEVC files will stutter badly or crash |
 | Pi 4 / 400 | HEVC (H.265), up to 4K 60 fps, **level 5.1**, ≤ 60 Mbps; or H.264 up to 1080p60 | H.264 is limited to 1080p; HEVC above level 5.1 can crash VLC |
 | Pi 5 / 500 | Same as Pi 4 | H.264 is decoded by the CPU (fine up to 1080p60) |
@@ -348,9 +409,13 @@ also name the detected model and its limits. To check:
 journalctl --user -u osc-vlc-player | grep -iE "warning|Raspberry Pi"
 ```
 
+**Lite mode on older Pis:** on a Pi Zero, 2 or 3, use Lite mode (section 1,
+*Desktop or Lite*). Even within these limits, playing through the desktop
+drops frames on these models.
+
 **Mixing formats:** a playlist can mix formats, for example 1080p30 H.264 and
 4K60 HEVC. At each change of format, the screen briefly shows the desktop
-while VLC restarts its video output (see Troubleshooting in section 1). For
+(or the text console in Lite mode) while VLC restarts its video output (see Troubleshooting in section 1). For
 seamless changes throughout, export every video with the same codec,
 resolution and frame rate.
 
@@ -383,10 +448,10 @@ screen (see *Picture shape* in section 1).
   `/boot/firmware/config.txt`, then reboot. Without it, 4K output is limited to
   30 Hz. The Pi 5 doesn't need this.
 - **Pi Zero / Zero W / Zero 2 W:** 512 MB of RAM is tight for the desktop plus
-  VLC. Keep other programs closed, and keep videos at 720p (Zero / Zero W) or
-  1080p30 (Zero 2 W). They have a mini-HDMI port, so you need an adapter.
-- **Pi 2, Pi 3 and the Zeros:** expect the desktop to take noticeably longer to
-  start at boot before the video appears.
+  VLC, so use Lite mode. Keep videos at 720p (Zero / Zero W) or 1080p30
+  (Zero 2 W). They have a mini-HDMI port, so you need an adapter.
+- **Pi 2, Pi 3 and the Zeros:** use Lite mode for smooth playback. It also
+  starts the video much sooner after boot.
 - **Two screens (Pi 4 / 5):** the player stretches to fit the first screen it
   finds. With two screens connected, set the ratio by hand with `--aspect`
   (section 1, *Picture shape*).

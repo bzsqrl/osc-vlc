@@ -1,27 +1,28 @@
-# systemd *user* service for osc_vlc_player.py on Raspberry Pi OS Desktop.
-#
-# The video window has to open on the desktop, so this runs inside your login
-# session (not as a system service). It's started by the companion autostart
-# entry osc-vlc-player.desktop, which first hands the session's display
-# variables (WAYLAND_DISPLAY / DISPLAY) to systemd.
+# systemd *user* service for osc_vlc_player.py on Raspberry Pi OS.
+# install.sh sets it up; the notes below are for doing it by hand.
 #
 # Works for any username: %h below is the home folder of the user running it
-# (install it as the user the desktop logs in as, e.g. pi; no editing needed).
+# (install it as your normal user, e.g. pi; no editing needed).
+#
+# It runs one of two ways:
+#
+#   Desktop: the video plays in a window on the desktop, so the player has to
+#     run inside your login session. The companion autostart entry
+#     osc-vlc-player.desktop starts it after the desktop logs in, first handing
+#     the session's display variables (WAYLAND_DISPLAY / DISPLAY) to systemd.
+#     Do NOT enable the service in this mode.
+#
+#   Lite (no desktop): VLC draws straight to the screen, which is much lighter
+#     (smooth 1080p on a Pi 3). The service is enabled and starts at boot,
+#     without anyone logging in:
+#       sudo loginctl enable-linger $USER
+#       systemctl --user enable osc-vlc-player
 #
 # Assumes:
 #   - script at ~/osc_vlc_player.py, videos in ~/Videos
 #   - a venv at ~/venv:
 #       python3 -m venv --system-site-packages ~/venv
 #       ~/venv/bin/pip install python-osc python-vlc
-#   - the desktop logs in automatically at boot
-#     (sudo raspi-config -> System Options -> Boot / Auto Login -> Desktop Autologin)
-#
-# Install (as your normal user, no sudo):
-#   mkdir -p ~/.config/systemd/user ~/.config/autostart
-#   cp osc-vlc-player.service ~/.config/systemd/user/
-#   cp osc-vlc-player.desktop ~/.config/autostart/
-#   systemctl --user daemon-reload
-#   then reboot
 #
 # Manage:
 #   systemctl --user status osc-vlc-player
@@ -39,9 +40,13 @@ Type=simple
 # lgpio (gpiozero's backend) needs a writable working directory
 WorkingDirectory=%h
 Environment=PYTHONUNBUFFERED=1
-# If the video window doesn't appear or won't go fullscreen under Wayland,
-# uncomment this to make VLC use XWayland instead:
+# Desktop only: if the video window doesn't appear or won't go fullscreen
+# under Wayland, uncomment this to make VLC use XWayland instead:
 #UnsetEnvironment=WAYLAND_DISPLAY
 ExecStart=%h/venv/bin/python %h/osc_vlc_player.py %h/Videos
 Restart=on-failure
 RestartSec=5
+
+[Install]
+# used in Lite mode only (systemctl --user enable), to start at boot
+WantedBy=default.target

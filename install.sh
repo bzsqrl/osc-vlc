@@ -1,17 +1,29 @@
 #!/usr/bin/env bash
-# Installer for the OSC/GPIO video player on Raspberry Pi OS Desktop.
+# Installer for the OSC/GPIO video player on Raspberry Pi OS (Desktop or Lite).
 #
-# Copy this folder to the Pi, then from inside it run, as the user the desktop
-# logs in as (NOT with sudo; it asks for your password when it needs it):
+# Copy this folder to the Pi, then from inside it run, as your normal user
+# (NOT with sudo; it asks for your password when it needs it):
 #
 #     bash install.sh [options]
 #
 # Safe to run again, e.g. to update after copying over newer files.
 #
+# Two ways to run the player:
+#   desktop  plays in a fullscreen window on the desktop (needs Raspberry Pi OS
+#            with desktop). Fine on a Pi 4 or 5.
+#   lite     no desktop: starts at boot and draws straight to the screen. Much
+#            lighter; use it for smooth playback on a Pi Zero, 2 or 3. Works on
+#            Raspberry Pi OS Lite, or on a desktop install (the desktop is then
+#            turned off at boot; switch back with --desktop).
+# The first install picks lite on Raspberry Pi OS Lite and desktop otherwise;
+# later runs keep whichever mode is installed.
+#
 # Options:
-#   --desktop-icon   also put the start and stop icons on the desktop
+#   --lite           use lite mode (see above)
+#   --desktop        use desktop mode (see above)
+#   --desktop-icon   desktop mode: also put the start and stop icons on the desktop
 #   --4k60           Pi 4 / 400 only: enable 4K 60 Hz HDMI output (edits config.txt)
-#   --no-system      skip the steps that need sudo (packages, auto login,
+#   --no-system      skip the steps that need sudo (packages, boot settings,
 #                    screen blanking, --4k60)
 #   --uninstall      remove the player (keeps ~/Videos and ~/venv)
 #   -h, --help       show this help
@@ -31,12 +43,16 @@ APPS_DIR="$HOME/.local/share/applications"
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
 VIDEOS_DIR="$HOME/Videos"
 VENV="$HOME/venv"
+# kernel options for lite mode: no console blanking, cursor or boot logo
+CMDLINE_OPTIONS=(consoleblank=0 vt.global_cursor_default=0 logo.nologo)
 
+MODE=""
 DESKTOP_ICON=false
 HDMI_4K60=false
 SYSTEM=true
 UNINSTALL=false
-REBOOT=false
+REBOOT=false        # a reboot is needed before the player can run
+BOOT_CHANGED=false  # boot settings changed; they apply at the next boot
 
 step() { printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -50,8 +66,18 @@ put() {  # put SRC DEST_DIR [MODE]
     chmod "${3:-644}" "$dest"
 }
 
+desktop_installed() {
+    [ -x /usr/sbin/lightdm ] || dpkg -s raspberrypi-ui-mods > /dev/null 2>&1
+}
+
+desktop_running() {
+    pgrep -x labwc > /dev/null || pgrep -x wayfire > /dev/null || pgrep -x Xorg > /dev/null
+}
+
 for arg in "$@"; do
     case "$arg" in
+        --lite)         MODE=lite ;;
+        --desktop)      MODE=desktop ;;
         --desktop-icon) DESKTOP_ICON=true ;;
         --4k60)         HDMI_4K60=true ;;
         --no-system)    SYSTEM=false ;;
@@ -77,7 +103,7 @@ fi
 
 if $UNINSTALL; then
     step "Removing the video player"
-    systemctl --user stop "$SERVICE" 2>/dev/null || true
+    systemctl --user disable --now "$SERVICE" 2>/dev/null || true
     rm -f "$SERVICE_DIR/$SERVICE" "$AUTOSTART_DIR/osc-vlc-player.desktop" \
           "$APPS_DIR"/osc-vlc-player-{launcher,stop}.desktop \
           "$DESKTOP_DIR"/osc-vlc-player-{launcher,stop}.desktop
@@ -85,13 +111,35 @@ if $UNINSTALL; then
     [ "$SRC" = "$HOME" ] || rm -f "$HOME/osc_vlc_player.py"
     systemctl --user daemon-reload 2>/dev/null || true
     note "Done. Kept your videos in $VIDEOS_DIR, the Python environment in $VENV"
-    note "(remove it with: rm -rf ~/venv) and the auto login / screen blanking settings."
+    note "(remove it with: rm -rf ~/venv) and the boot / screen blanking settings."
     exit 0
 fi
 
 for f in "${FILES[@]}"; do
     [ -f "$SRC/$f" ] || die "$f is missing; run this from the folder with the player files"
 done
+
+# --- mode ---------------------------------------------------------------------
+
+if [ -z "$MODE" ]; then
+    if systemctl --user is-enabled --quiet "$SERVICE" 2> /dev/null; then
+        MODE=lite       # already installed in lite mode
+    elif [ -f "$AUTOSTART_DIR/osc-vlc-player.desktop" ]; then
+        MODE=desktop    # already installed in desktop mode
+    elif desktop_installed; then
+        MODE=desktop
+    else
+        MODE=lite
+    fi
+fi
+if [ "$MODE" = desktop ] && ! desktop_installed; then
+    die "desktop mode needs Raspberry Pi OS with desktop; this looks like Lite (use --lite)"
+fi
+if [ "$MODE" = lite ]; then
+    echo "Mode: lite (no desktop; the player starts at boot and draws straight to the screen)"
+else
+    echo "Mode: desktop (the player runs fullscreen on the desktop)"
+fi
 
 # --- system settings (sudo) -----------------------------------------------------
 
@@ -122,7 +170,40 @@ if $SYSTEM; then
         sudo systemctl daemon-reload
     fi
 
-    if command -v raspi-config > /dev/null; then
+    if [ "$MODE" = lite ]; then
+        step "Starting the player at boot, without logging in"
+        sudo loginctl enable-linger "$USER" ||
+            warn "couldn't enable lingering; the player will only start once you log in"
+
+        if desktop_installed && command -v raspi-config > /dev/null &&
+           [ "$(systemctl get-default 2> /dev/null)" = graphical.target ]; then
+            step "Turning off the desktop at boot (bash install.sh --desktop turns it back on)"
+            sudo raspi-config nonint do_boot_behaviour B1 ||
+                warn "couldn't change it; use raspi-config > System Options > Boot / Auto Login > Console"
+            BOOT_CHANGED=true
+            desktop_running && REBOOT=true  # the desktop holds the screen until then
+        fi
+
+        step "Hiding the text console behind the video"
+        CMDLINE=/boot/firmware/cmdline.txt
+        [ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
+        if [ -f "$CMDLINE" ]; then
+            added=()
+            for opt in "${CMDLINE_OPTIONS[@]}"; do
+                grep -qw -- "$opt" "$CMDLINE" || added+=("$opt")
+            done
+            if [ ${#added[@]} -gt 0 ]; then
+                # cmdline.txt must stay a single line
+                sudo sed -i "1 s/\$/ ${added[*]}/" "$CMDLINE"
+                note "added to $CMDLINE: ${added[*]}"
+                BOOT_CHANGED=true
+            else
+                note "already set"
+            fi
+        else
+            warn "cmdline.txt not found; the console cursor may show between videos"
+        fi
+    elif command -v raspi-config > /dev/null; then
         step "Setting the desktop to log in automatically as $USER"
         # takes effect at the next boot; the player can still start right now
         sudo raspi-config nonint do_boot_behaviour B4 ||
@@ -153,26 +234,37 @@ if $SYSTEM; then
 else
     step "Skipping system settings (--no-system)"
     note "make sure these are installed: ${PACKAGES[*]}"
+    if [ "$MODE" = lite ]; then
+        note "and run: sudo loginctl enable-linger $USER   (to start at boot)"
+    fi
 fi
 
 # --- player files ---------------------------------------------------------------
 
 step "Installing the player files"
-mkdir -p "$SERVICE_DIR" "$AUTOSTART_DIR" "$APPS_DIR" "$VIDEOS_DIR"
+mkdir -p "$SERVICE_DIR" "$VIDEOS_DIR"
 [ "$SRC" = "$HOME" ] || put "$SRC/osc_vlc_player.py" "$HOME"
 put "$SRC/osc-vlc-player.service" "$SERVICE_DIR"
-put "$SRC/osc-vlc-player.desktop" "$AUTOSTART_DIR"
-put "$SRC/osc-vlc-player-launcher.desktop" "$APPS_DIR"
-put "$SRC/osc-vlc-player-stop.desktop" "$APPS_DIR"
 note "script:      ~/osc_vlc_player.py"
 note "service:     ~/.config/systemd/user/$SERVICE"
-note "autostart:   ~/.config/autostart/osc-vlc-player.desktop"
-note "menu:        Sound & Video > Video Player (OSC) / Stop Video Player (OSC)"
-if $DESKTOP_ICON; then
-    mkdir -p "$DESKTOP_DIR"
-    put "$SRC/osc-vlc-player-launcher.desktop" "$DESKTOP_DIR" 755
-    put "$SRC/osc-vlc-player-stop.desktop" "$DESKTOP_DIR" 755
-    note "desktop icons: start and stop, in $DESKTOP_DIR"
+if [ "$MODE" = lite ]; then
+    # the desktop entries would start a second copy if the desktop came back
+    rm -f "$AUTOSTART_DIR/osc-vlc-player.desktop" \
+          "$APPS_DIR"/osc-vlc-player-{launcher,stop}.desktop \
+          "$DESKTOP_DIR"/osc-vlc-player-{launcher,stop}.desktop
+else
+    mkdir -p "$AUTOSTART_DIR" "$APPS_DIR"
+    put "$SRC/osc-vlc-player.desktop" "$AUTOSTART_DIR"
+    put "$SRC/osc-vlc-player-launcher.desktop" "$APPS_DIR"
+    put "$SRC/osc-vlc-player-stop.desktop" "$APPS_DIR"
+    note "autostart:   ~/.config/autostart/osc-vlc-player.desktop"
+    note "menu:        Sound & Video > Video Player (OSC) / Stop Video Player (OSC)"
+    if $DESKTOP_ICON; then
+        mkdir -p "$DESKTOP_DIR"
+        put "$SRC/osc-vlc-player-launcher.desktop" "$DESKTOP_DIR" 755
+        put "$SRC/osc-vlc-player-stop.desktop" "$DESKTOP_DIR" 755
+        note "desktop icons: start and stop, in $DESKTOP_DIR"
+    fi
 fi
 
 # --- Python environment ---------------------------------------------------------
@@ -196,6 +288,15 @@ fi
     warn "gpiozero not available: GPIO buttons won't work (OSC still will)"
 
 systemctl --user daemon-reload
+if [ "$MODE" = lite ]; then
+    systemctl --user enable "$SERVICE" 2> /dev/null ||
+        warn "couldn't enable the service; run: systemctl --user enable osc-vlc-player"
+    # forget any desktop display passed to systemd earlier, so VLC uses the screen
+    systemctl --user unset-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY 2> /dev/null || true
+else
+    # desktop mode: started by the autostart entry, not at boot
+    systemctl --user disable "$SERVICE" 2> /dev/null || true
+fi
 
 # --- start ----------------------------------------------------------------------
 
@@ -203,13 +304,8 @@ shopt -s nullglob nocaseglob
 videos=("$VIDEOS_DIR"/*.{mp4,mkv,mov,avi,m4v,webm,mpg,mpeg,ts,wmv})
 shopt -u nullglob nocaseglob
 
-if [ ${#videos[@]} -eq 0 ]; then
-    step "No videos yet"
-    note "Put your videos in $VIDEOS_DIR, then start the player from the menu"
-    note "(Sound & Video > Video Player (OSC)) or reboot."
-elif [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && ! $REBOOT; then
+start_player() {
     step "Starting the player with ${#videos[@]} video(s)"
-    systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY 2> /dev/null || true
     systemctl --user restart "$SERVICE"
     sleep 3
     if systemctl --user is-active --quiet "$SERVICE"; then
@@ -217,21 +313,43 @@ elif [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && ! $REBOOT; then
     else
         warn "it didn't start; see: journalctl --user -u osc-vlc-player -n 30"
     fi
+}
+
+STARTED=false
+if [ ${#videos[@]} -eq 0 ]; then
+    step "No videos yet"
+    if [ "$MODE" = lite ]; then
+        note "Put your videos in $VIDEOS_DIR, then run:  systemctl --user restart osc-vlc-player"
+    else
+        note "Put your videos in $VIDEOS_DIR, then start the player from the menu"
+        note "(Sound & Video > Video Player (OSC)) or reboot."
+    fi
+elif $REBOOT; then
+    :  # started after the reboot
+elif [ "$MODE" = lite ]; then
+    start_player; STARTED=true
+elif [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
+    systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XAUTHORITY 2> /dev/null || true
+    start_player; STARTED=true
 fi
 
 # --- summary --------------------------------------------------------------------
 
 IP="$(hostname -I 2> /dev/null | awk '{print $1}')"
 [ -n "$IP" ] || IP="<the Pi's IP address>"
-step "Installed"
+step "Installed ($MODE mode)"
 note "TouchOSC connection: host $IP, send port 9000, receive port 9001"
 note "                     (for player N of several: connection N, receive port 9000 + N)"
 note "Live log:            journalctl --user -u osc-vlc-player -f"
+note "Stop / start:        systemctl --user stop osc-vlc-player / start osc-vlc-player"
 note "Uninstall:           bash install.sh --uninstall"
 if $REBOOT; then
     echo
     echo "    Reboot to finish (sudo reboot). The player starts automatically."
-elif [ -z "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && [ ${#videos[@]} -gt 0 ]; then
+elif $BOOT_CHANGED; then
+    echo
+    echo "    Boot settings changed; they take effect at the next reboot."
+elif [ "$MODE" = desktop ] && ! $STARTED && [ ${#videos[@]} -gt 0 ]; then
     echo
     echo "    Reboot, or log in to the desktop, to start the player."
 fi
