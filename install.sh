@@ -28,12 +28,16 @@
 #                    screen blanking, --4k60)
 #   --uninstall      remove the player (keeps ~/Videos and ~/venv)
 #   -h, --help       show this help
+#
+# The player plays ~/Videos, or the videos on a USB drive while one is plugged
+# in. In lite mode the installer adds a udev rule that mounts USB drives.
 
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FILES=(osc_vlc_player.py osc-vlc-player.service osc-vlc-player.desktop
-       osc-vlc-player-launcher.desktop osc-vlc-player-stop.desktop)
+       osc-vlc-player-launcher.desktop osc-vlc-player-stop.desktop
+       osc-vlc-usb-mount 99-osc-vlc-usb.rules)
 PACKAGES=(vlc python3-venv python3-gpiozero python3-lgpio)
 PIP_PACKAGES=(python-osc python-vlc)
 
@@ -47,6 +51,9 @@ VENV="$HOME/venv"
 MODE_FILE="$HOME/.config/osc-vlc-player/mode"  # mode chosen with --lite / --desktop
 # Pi 1, 2, 3 (incl. 3B+), Zero, Zero 2 W, CM1, CM3: too slow for video on the desktop
 OLDER_PI='Pi (Model|Zero|2 |3 )|Compute Module (Rev|3)'
+# lite mode: mount USB drives (the desktop does this itself)
+USB_RULE=/etc/udev/rules.d/99-osc-vlc-usb.rules
+USB_MOUNT=/usr/local/sbin/osc-vlc-usb-mount
 # kernel options for lite mode: no console blanking, cursor or boot logo
 CMDLINE_OPTIONS=(consoleblank=0 vt.global_cursor_default=0 logo.nologo)
 
@@ -76,6 +83,12 @@ desktop_installed() {
 
 desktop_running() {
     pgrep -x labwc > /dev/null || pgrep -x wayfire > /dev/null || pgrep -x Xorg > /dev/null
+}
+
+remove_usb_mounting() {
+    if [ -e "$USB_RULE" ] || [ -e "$USB_MOUNT" ]; then
+        sudo rm -f "$USB_RULE" "$USB_MOUNT" && sudo udevadm control --reload-rules
+    fi
 }
 
 for arg in "$@"; do
@@ -114,6 +127,7 @@ if $UNINSTALL; then
     # don't delete the script if this folder *is* the home folder
     [ "$SRC" = "$HOME" ] || rm -f "$HOME/osc_vlc_player.py"
     rm -rf "$(dirname "$MODE_FILE")"
+    remove_usb_mounting || warn "couldn't remove $USB_RULE and $USB_MOUNT"
     systemctl --user daemon-reload 2>/dev/null || true
     note "Done. Kept your videos in $VIDEOS_DIR, the Python environment in $VENV"
     note "(remove it with: rm -rf ~/venv) and the boot / screen blanking settings."
@@ -198,6 +212,22 @@ if $SYSTEM; then
             desktop_running && REBOOT=true  # the desktop holds the screen until then
         fi
 
+        step "Mounting USB drives when they're plugged in"
+        # copied with put() via a temp folder: it needs sudo to write there
+        tmp="$(mktemp -d)"
+        put "$SRC/osc-vlc-usb-mount" "$tmp" 755
+        put "$SRC/99-osc-vlc-usb.rules" "$tmp"
+        if sudo install -m 755 "$tmp/osc-vlc-usb-mount" "$USB_MOUNT" &&
+           sudo install -m 644 "$tmp/99-osc-vlc-usb.rules" "$USB_RULE" &&
+           sudo udevadm control --reload-rules; then
+            # mount any drive that's already plugged in
+            sudo udevadm trigger --action=add --subsystem-match=block || true
+            note "drives are mounted read-only under /media/usb/"
+        else
+            warn "couldn't set it up; videos on USB drives won't be found"
+        fi
+        rm -rf "$tmp"
+
         step "Hiding the text console behind the video"
         CMDLINE=/boot/firmware/cmdline.txt
         [ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
@@ -218,6 +248,7 @@ if $SYSTEM; then
             warn "cmdline.txt not found; the console cursor may show between videos"
         fi
     elif command -v raspi-config > /dev/null; then
+        remove_usb_mounting || true  # left from lite mode; the desktop mounts drives
         step "Setting the desktop to log in automatically as $USER"
         # takes effect at the next boot; the player can still start right now
         sudo raspi-config nonint do_boot_behaviour B4 ||
@@ -250,6 +281,7 @@ else
     note "make sure these are installed: ${PACKAGES[*]}"
     if [ "$MODE" = lite ]; then
         note "and run: sudo loginctl enable-linger $USER   (to start at boot)"
+        note "USB drives are not mounted automatically without the system steps"
     fi
 fi
 
@@ -319,7 +351,7 @@ videos=("$VIDEOS_DIR"/*.{mp4,mkv,mov,avi,m4v,webm,mpg,mpeg,ts,wmv})
 shopt -u nullglob nocaseglob
 
 start_player() {
-    step "Starting the player with ${#videos[@]} video(s)"
+    step "Starting the player"
     systemctl --user restart "$SERVICE"
     sleep 3
     if systemctl --user is-active --quiet "$SERVICE"; then
@@ -332,13 +364,10 @@ start_player() {
 STARTED=false
 if [ ${#videos[@]} -eq 0 ]; then
     step "No videos yet"
-    if [ "$MODE" = lite ]; then
-        note "Put your videos in $VIDEOS_DIR, then run:  systemctl --user restart osc-vlc-player"
-    else
-        note "Put your videos in $VIDEOS_DIR, then start the player from the menu"
-        note "(Sound & Video > Video Player (OSC)) or reboot."
-    fi
-elif $REBOOT; then
+    note "Put your videos in $VIDEOS_DIR, or on a USB drive (in its top folder)."
+    note "The player waits for them and starts playing once they're there."
+fi
+if $REBOOT; then
     :  # started after the reboot
 elif [ "$MODE" = lite ]; then
     start_player; STARTED=true
@@ -363,7 +392,7 @@ if $REBOOT; then
 elif $BOOT_CHANGED; then
     echo
     echo "    Boot settings changed; they take effect at the next reboot."
-elif [ "$MODE" = desktop ] && ! $STARTED && [ ${#videos[@]} -gt 0 ]; then
+elif [ "$MODE" = desktop ] && ! $STARTED; then
     echo
     echo "    Reboot, or log in to the desktop, to start the player."
 fi

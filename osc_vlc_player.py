@@ -12,8 +12,12 @@ Install (Raspberry Pi OS Desktop; vlc and gpiozero come preinstalled):
 
 Run (from a terminal on the desktop, or via osc-vlc-player.service):
     python3 osc_vlc_player.py                  # plays ~/Videos of whoever runs it
-    python3 osc_vlc_player.py /media/usb/show  # or any folder / files
+    python3 osc_vlc_player.py /home/pi/show    # or any folder / files
     python3 osc_vlc_player.py clip1.mp4 clip2.mov --port 9000 --loop all
+
+USB drives: while a USB drive with videos in its top folder is plugged in, the
+player plays those instead (looking at drives mounted under /media). Plugging
+it in or pulling it out switches over straight away. --no-usb turns this off.
 
 OSC address map (all arguments optional unless noted):
     /play                    resume / start playback
@@ -109,6 +113,11 @@ FULLSCREEN_DELAY_SECONDS = 0.5
 # Warn if a video has been playing this long without VLC managing to show it.
 NO_PICTURE_SECONDS = 5
 
+# USB drives: the desktop mounts them under /media/<user>/, and in Lite mode
+# install.sh's udev rule mounts them under /media/usb/. Checked this often.
+USB_MOUNT_ROOT = "/media/"
+USB_POLL_SECONDS = 2
+
 # What each Raspberry Pi can decode smoothly: codec -> (max width, max height, max fps).
 # Anything else falls back to software decoding and will stutter (or worse).
 DECODE_LIMITS = {
@@ -132,15 +141,78 @@ def collect_media(paths):
     files = []
     for p in map(Path, paths):
         if p.is_dir():
-            files.extend(sorted(
-                f for f in p.iterdir()
-                if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
-            ))
+            try:
+                files.extend(sorted(
+                    f for f in p.iterdir()
+                    # skip hidden files, e.g. the "._clip.mp4" files macOS
+                    # leaves on USB drives
+                    if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
+                    and not f.name.startswith(".")
+                ))
+            except OSError as e:  # unreadable, or a drive pulled out mid-scan
+                print(f"warning: can't read {p}: {e}", file=sys.stderr)
         elif p.is_file():
             files.append(p)
         else:
             print(f"warning: skipping missing path {p}", file=sys.stderr)
     return [str(f.resolve()) for f in files]
+
+
+def usb_drives():
+    """Mount points of the drives mounted under /media, in name order."""
+    points = []
+    try:
+        with open("/proc/mounts", encoding="utf-8", errors="replace") as mounts:
+            for line in mounts:
+                device, point = line.split()[:2]
+                # spaces etc. in a drive's name appear as octal escapes (\040)
+                point = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), point)
+                if device.startswith("/dev/") and point.startswith(USB_MOUNT_ROOT):
+                    points.append(point)
+    except OSError:  # no /proc/mounts: not Linux
+        pass
+    return sorted(points)
+
+
+class PlaylistSource:
+    """Where the playlist comes from: the videos in the top folder of a USB
+    drive, if one is plugged in and has any, otherwise the given paths."""
+
+    def __init__(self, paths, use_usb):
+        self.paths = paths
+        self.use_usb = use_usb
+        self.drives = []    # drives mounted at the last scan
+        self.drive = None   # the drive the playlist comes from, or None
+
+    def changed(self):
+        """True if a drive has been plugged in or pulled out since the last scan."""
+        return self.use_usb and usb_drives() != self.drives
+
+    def scan(self):
+        """Return the playlist to use now, and remember which drive it's from."""
+        self.drives = usb_drives() if self.use_usb else []
+        for drive in self.drives:
+            files = collect_media([drive])
+            if files:
+                self.drive = drive
+                return files
+        self.drive = None
+        return collect_media(self.paths)
+
+    def describe(self):
+        if self.drive:
+            return f"USB drive {self.drive}"
+        return ", ".join(self.paths)
+
+
+def print_playlist(files, source):
+    if not files:
+        where = " or a USB drive" if source.use_usb else ""
+        print(f"no videos in {source.describe()}: waiting for videos there{where}")
+        return
+    print(f"loaded {len(files)} video(s) from {source.describe()}:")
+    for i, f in enumerate(files):
+        print(f"  [{i}] {Path(f).name}")
 
 
 def _run(cmd):
@@ -329,16 +401,12 @@ class VideoController:
 
         # The playlist is run here rather than by VLC's MediaListPlayer, so that
         # every change of video goes through _play_index() (see SWITCH_MODES).
-        self.medias = [self.instance.media_new(f) for f in files]
+        self.medias = []
         self.index = 0
         self.switch_mode = switch_mode
-        self.formats = [None] * len(files)  # (codec, w, h, fps) per file, once probed
         # True from starting a video until stop(): VLC's video output (and window)
         # stays open even after a video ends, until the player is stopped
         self._output_open = False
-        if switch_mode == "auto":
-            for media in self.medias:  # read each file's format in the background
-                media.parse_with_options(vlc.MediaParseFlag.local, PROBE_TIMEOUT_MS)
         self._ended = threading.Event()  # set by VLC when a video plays to the end
         self._on_end = lambda event: self._ended.set()  # keep a reference
         self.player.event_manager().event_attach(
@@ -364,15 +432,36 @@ class VideoController:
         self.ab_end = None    # ms
         self._ab_index = -1   # playlist index the loop belongs to
         self.board_model, self.board = detect_board()
-        self._checked_index = None  # last playlist index checked against the board
         self._no_picture_for = 0.0  # seconds played without a picture
         self._picture_checked_at = time.monotonic()
         self._picture_warned = False
+        self._set_playlist(files)
         self._closing = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch, daemon=True)
         self._watch_thread.start()
 
     # --- helpers -----------------------------------------------------------
+
+    def _set_playlist(self, files):
+        old = self.medias
+        self.files = files
+        self.medias = [self.instance.media_new(f) for f in files]
+        self.formats = [None] * len(files)  # (codec, w, h, fps) per file, once probed
+        self.index = 0
+        self._checked_index = None  # last playlist index checked against the board
+        if self.switch_mode == "auto":
+            for media in self.medias:  # read each file's format in the background
+                media.parse_with_options(vlc.MediaParseFlag.local, PROBE_TIMEOUT_MS)
+        for media in old:
+            media.release()
+
+    @locked
+    def load(self, files, autoplay):
+        """Replace the playlist, e.g. when a USB drive is plugged in or pulled out."""
+        self.stop()
+        self._set_playlist(files)
+        if autoplay and files:
+            self.play()
 
     def current_index(self):
         return self.index if self.player.get_media() else -1
@@ -406,6 +495,8 @@ class VideoController:
 
     def _step(self, delta, wrap):
         """Index `delta` videos from the current one, or None at the end of the list."""
+        if not self.medias:
+            return None
         index = self.index + delta
         if wrap:
             return index % len(self.medias)
@@ -431,7 +522,9 @@ class VideoController:
 
     @locked
     def play(self):
-        if not self._is_idle():
+        if not self.medias:
+            print("no videos to play")
+        elif not self._is_idle():
             self.player.set_pause(0)
         elif (self.player.get_state() == vlc.State.Ended
               and self._step(1, wrap=False) is None):
@@ -915,6 +1008,8 @@ def main():
                         help="fully restart VLC's video output when changing videos: "
                              '"auto" (default) only when the next video has a different '
                              'codec, resolution or frame rate, "always", or "never"')
+    parser.add_argument("--no-usb", action="store_true",
+                        help="don't play videos from USB drives")
     parser.add_argument("--debug", action="store_true",
                         help="verbose VLC log (shows which decoder / video output is used)")
 
@@ -934,9 +1029,8 @@ def main():
                                help=f"{help_text} (default: {default})")
     args = parser.parse_args()
 
-    files = collect_media(args.paths)
-    if not files:
-        sys.exit("no video files found")
+    source = PlaylistSource(args.paths, use_usb=not args.no_usb)
+    files = source.scan()
 
     init_x11_threads()
     vlc_args = [
@@ -981,17 +1075,35 @@ def main():
     # Blocking server handles one OSC message at a time
     server = BlockingOSCUDPServer((args.ip, args.port), dispatcher)
 
-    print(f"loaded {len(files)} video(s):")
-    for i, f in enumerate(files):
-        print(f"  [{i}] {Path(f).name}")
+    print_playlist(files, source)
     print(f"listening for OSC on {args.ip}:{args.port}")
 
-    if not args.no_autoplay:
+    if files and not args.no_autoplay:
         ctrl.play()
+
+    def watch_source():
+        """Switch playlists when a USB drive is plugged in or pulled out, and
+        keep looking for videos while there are none."""
+        while not closing.wait(USB_POLL_SECONDS):
+            if not source.changed() and ctrl.files:
+                continue
+            was = source.describe()
+            files = source.scan()
+            if files != ctrl.files:
+                if ctrl.files and files:
+                    print(f"switching from {was} to {source.describe()}")
+                print_playlist(files, source)
+                ctrl.load(files, autoplay=not args.no_autoplay)
+
+    closing = threading.Event()
+    source_thread = threading.Thread(target=watch_source, daemon=True)
+    source_thread.start()
 
     try:
         server.serve_forever()
     finally:
+        closing.set()
+        source_thread.join()
         server.server_close()
         if gpio:
             gpio.close()

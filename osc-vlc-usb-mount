@@ -1,0 +1,22 @@
+#!/bin/sh
+# Mounts a USB drive for the video player in Lite mode (the desktop mounts
+# drives itself). Run by udev through 99-osc-vlc-usb.rules for each partition
+# of a plugged-in USB drive; install.sh copies it to /usr/local/sbin.
+#
+# The drive is mounted read-only at /media/usb/<name> (e.g. /media/usb/sda1),
+# where osc_vlc_player.py looks for videos, so it's safe to pull out at any
+# time. systemd unmounts it again when it's pulled out.
+
+dev="$1"    # e.g. /dev/sda1
+
+# Leave alone the drive the Pi boots from, when it boots from USB.
+root_disk=$(lsblk -no PKNAME "/dev/block/$(mountpoint -d /)" 2> /dev/null)
+disk=$(lsblk -no PKNAME "$dev" 2> /dev/null)
+[ -n "$disk" ] && [ "$disk" = "$root_disk" ] && exit 0
+
+options=ro
+[ "$ID_FS_TYPE" = vfat ] && options=ro,utf8  # show accented file names properly
+
+# systemd does the mounting: udev itself isn't allowed to
+exec systemd-mount --no-block --automount=no --collect --options="$options" \
+    "$dev" "/media/usb/${dev##*/}"

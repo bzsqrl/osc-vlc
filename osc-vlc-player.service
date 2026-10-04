@@ -32,7 +32,7 @@
 
 [Unit]
 Description=OSC/GPIO-controlled VLC video player
-# Don't give up if it crash-loops (e.g. Videos folder is empty at boot)
+# Don't give up if it crash-loops (e.g. the screen isn't ready at boot)
 StartLimitIntervalSec=0
 
 [Service]

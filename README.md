@@ -1,14 +1,17 @@
 # OSC Video Player for Raspberry Pi
 
-A fullscreen video player for Raspberry Pi OS Desktop. It plays every video in
-`~/Videos` as a playlist and is controlled over the network with OSC (e.g. from
-TouchOSC) and/or with physical buttons and a rotary encoder.
+A fullscreen video player for Raspberry Pi OS. It plays every video in
+`~/Videos`, or on a plugged-in USB drive, as a playlist and is controlled over
+the network with OSC (e.g. from TouchOSC) and/or with physical buttons and a
+rotary encoder.
 
 - **Playback control:** play/pause, previous/next, seek, skip, scrub, speed,
   volume, loop modes and A-B loops.
 - **Ready-made TouchOSC layout:** controls up to 8 Pis, one page each, plus a
   page that controls them all at once.
 - **Hardware controls:** GPIO buttons and a rotary encoder for seeking.
+- **USB drives:** plug in a drive with videos and it plays those instead,
+  until it's pulled out again.
 - **Unattended use:** starts fullscreen at boot and restarts itself after a crash.
 - **Desktop or Lite:** runs on Raspberry Pi OS with desktop, or without one
   (Lite) for smooth playback on older Pis.
@@ -26,6 +29,7 @@ Built on VLC ([python-vlc](https://pypi.org/project/python-vlc/)) and
 | `osc-vlc-player.service` | systemd user service that runs the player |
 | `osc-vlc-player.desktop` | Autostart entry that starts the service at login |
 | `osc-vlc-player-launcher.desktop`, `osc-vlc-player-stop.desktop` | Start / stop entries for the desktop menu |
+| `osc-vlc-usb-mount`, `99-osc-vlc-usb.rules` | Lite mode: mount USB drives when they're plugged in |
 | `osc_vlc_player.tosc` | TouchOSC layout (section 2) |
 | `build_touchosc_layout.py` | Generates the TouchOSC layout |
 
@@ -94,14 +98,15 @@ the installer switches it to Lite, unless you add `--desktop`.
    cd ~/osc-vlc-player
    bash install.sh
    ```
-3. **Add videos** to `~/Videos` (mp4, mkv, mov, avi, m4v, webm, mpg, ts, wmv).
+3. **Add videos** to `~/Videos` (mp4, mkv, mov, avi, m4v, webm, mpg, ts, wmv),
+   or put them on a USB drive (see *Playing from a USB drive* below).
    They play in alphabetical order, so prefix names with numbers to set the order
    (`01-intro.mp4`, `02-main.mp4`, ...). Which formats play smoothly depends
    on the Pi model; see **section 5**.
 4. **Reboot** (`sudo reboot`). The player starts fullscreen and plays the
    whole playlist on a loop: in Desktop mode once the desktop loads, in Lite
-   mode straight after boot. If `~/Videos` already had videos, the installer
-   has started it already, unless it said a reboot is needed.
+   mode straight after boot. The installer has usually started it already,
+   unless it said a reboot is needed. With no videos yet, it waits for them.
 
 At the end, the installer prints the settings for TouchOSC (section 2).
 
@@ -117,6 +122,9 @@ At the end, the installer prints the settings for TouchOSC (section 2).
   text console's cursor, boot logo and blanking (it adds
   `consoleblank=0 vt.global_cursor_default=0 logo.nologo` to
   `/boot/firmware/cmdline.txt`).
+- **USB drives, Lite mode:** adds a udev rule (`/etc/udev/rules.d/99-osc-vlc-usb.rules`,
+  with `/usr/local/sbin/osc-vlc-usb-mount`) that mounts USB drives when
+  they're plugged in. On the desktop, the desktop does this itself.
 - **Player files:** copies the script to `~/osc_vlc_player.py` and the service
   to `~/.config/systemd/user/`. In Desktop mode it also adds the autostart
   entry to `~/.config/autostart/` and the menu entries for starting and
@@ -124,8 +132,8 @@ At the end, the installer prints the settings for TouchOSC (section 2).
   endings on the way.
 - **Python:** creates `~/venv` (or fixes an existing one so it can see
   gpiozero) and installs `python-osc` and `python-vlc` into it.
-- **Start:** starts the player right away if there are videos (in Desktop
-  mode, only when run from the desktop).
+- **Start:** starts the player right away (in Desktop mode, only when run
+  from the desktop).
 
 **Options:**
 | Option | Effect |
@@ -139,6 +147,30 @@ At the end, the installer prints the settings for TouchOSC (section 2).
 
 **To update** after changing any of the files, copy the folder over again and
 rerun `bash install.sh`. It's safe to run as often as you like.
+
+### Playing from a USB drive
+Like [Raspberry Pi Video Looper](https://videolooper.de/), the player can play
+videos straight from a USB drive:
+- Put the videos in the drive's **top folder** (not in a subfolder). Videos
+  in subfolders are ignored.
+- **Plug it in**, before or after the player starts. Within a couple of
+  seconds the player switches to the drive's videos and plays them from the
+  first one, as a playlist in alphabetical order.
+- **Pull it out** and the player goes back to the videos in `~/Videos`. It
+  only reads the drive, so it's safe to pull out at any time.
+- A drive with no videos in its top folder is ignored, and `~/Videos` keeps
+  playing. If several drives with videos are plugged in, the first one (in
+  order of the name it's mounted under) is used.
+
+Format the drive as **FAT32** or **exFAT** (most drives come that way; both
+work with Windows and Mac) or ext4. The log shows where the videos come from,
+e.g. `loaded 3 video(s) from USB drive /media/usb/sda1:`.
+
+How it finds the drive: in Desktop mode the desktop mounts drives under
+`/media/<your username>/`; in Lite mode the installer's udev rule mounts them,
+read-only, under `/media/usb/`. The player plays from any drive mounted under
+`/media`. To turn this off, add `--no-usb` to the end of the `ExecStart=` line
+in the service file (see *Troubleshooting*, *Picture shape*, for how).
 
 ### Quit and start again
 **To quit**, use any of these:
@@ -189,7 +221,13 @@ systemctl --user enable osc-vlc-player
 sudo raspi-config nonint do_boot_behaviour B1   # only on a desktop install: boot to console
 ```
 Then add `consoleblank=0 vt.global_cursor_default=0 logo.nologo` to the end of
-the single line in `/boot/firmware/cmdline.txt`, and reboot.
+the single line in `/boot/firmware/cmdline.txt`. To play from USB drives,
+install the rule that mounts them:
+```bash
+sudo install -m 755 osc-vlc-usb-mount /usr/local/sbin/
+sudo install -m 644 99-osc-vlc-usb.rules /etc/udev/rules.d/
+```
+Then reboot.
 
 ### Useful commands
 ```bash
@@ -200,7 +238,8 @@ systemctl --user start osc-vlc-player        # start again
 journalctl --user -u osc-vlc-player -f       # live log of every command received
 hostname -I                                  # the Pi's IP address, for TouchOSC
 ```
-New videos are picked up when the player restarts.
+New videos in `~/Videos` are picked up when the player restarts (or straight
+away, if it had none). USB drives are picked up when they're plugged in.
 
 ### Troubleshooting
 - **Which mode is it running in?** The log's first lines say
@@ -241,6 +280,10 @@ New videos are picked up when the player restarts.
   outputs with `aplay -l`, then choose one by adding e.g.
   `--vlc-args "--alsa-audio-device=hw:CARD=vc4hdmi0"` to the `ExecStart=`
   line, using a card name from that list.
+- **USB drive not played:** check the videos are in the drive's top folder.
+  Run `findmnt | grep /media` to see if the drive is mounted. If it isn't in
+  Lite mode, rerun `bash install.sh` to install the mounting rule, then plug
+  the drive in again. NTFS drives may not mount; use FAT32 or exFAT.
 - **Anything else:** check the log with `journalctl` (above).
 
 ---
