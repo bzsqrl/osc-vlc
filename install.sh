@@ -23,9 +23,10 @@
 #   --lite           use lite mode (see above)
 #   --desktop        use desktop mode (see above)
 #   --desktop-icon   desktop mode: also put the start and stop icons on the desktop
-#   --4k60           Pi 4 / 400 only: enable 4K 60 Hz HDMI output (edits config.txt)
+#   --no-4k60        Pi 4 / 400: don't enable 4K 60 Hz HDMI output (otherwise the
+#                    installer adds hdmi_enable_4kp60=1 to config.txt)
 #   --no-system      skip the steps that need sudo (packages, boot settings,
-#                    screen blanking, --4k60)
+#                    screen blanking, 4K 60 Hz)
 #   --uninstall      remove the player (keeps ~/Videos and ~/venv)
 #   -h, --help       show this help
 #
@@ -59,7 +60,7 @@ CMDLINE_OPTIONS=(consoleblank=0 vt.global_cursor_default=0 logo.nologo)
 
 MODE=""
 DESKTOP_ICON=false
-HDMI_4K60=false
+HDMI_4K60=auto     # auto: on for a Pi 4 / 400 / CM4, unless config.txt says otherwise
 SYSTEM=true
 UNINSTALL=false
 REBOOT=false        # a reboot is needed before the player can run
@@ -96,7 +97,8 @@ for arg in "$@"; do
         --lite)         MODE=lite ;;
         --desktop)      MODE=desktop ;;
         --desktop-icon) DESKTOP_ICON=true ;;
-        --4k60)         HDMI_4K60=true ;;
+        --4k60)         HDMI_4K60=true ;;  # overrides hdmi_enable_4kp60=0
+        --no-4k60)      HDMI_4K60=false ;;
         --no-system)    SYSTEM=false ;;
         --uninstall)    UNINSTALL=true ;;
         -h|--help)      sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
@@ -260,21 +262,35 @@ if $SYSTEM; then
         warn "raspi-config not found: set Desktop Autologin and turn off Screen Blanking yourself"
     fi
 
-    if $HDMI_4K60; then
-        step "Enabling 4K 60 Hz HDMI output"
-        if [[ "$MODEL" == *"Pi 4"* || "$MODEL" == *"Pi 400"* || "$MODEL" == *"Compute Module 4"* ]]; then
-            CONFIG=/boot/firmware/config.txt
-            [ -f "$CONFIG" ] || CONFIG=/boot/config.txt
-            if grep -q '^hdmi_enable_4kp60=1' "$CONFIG"; then
-                note "already enabled"
+    # A Pi 4 outputs 4K at only 30 Hz unless this is set (it raises the GPU
+    # clock), so 4K60 videos would show at 30 fps. The Pi 5 doesn't need it.
+    if [[ "$MODEL" == *"Pi 4"* || "$MODEL" == *"Compute Module 4"* ]]; then
+        CONFIG=/boot/firmware/config.txt
+        [ -f "$CONFIG" ] || CONFIG=/boot/config.txt
+        current="$(grep -o '^hdmi_enable_4kp60=[0-9]*' "$CONFIG" 2> /dev/null | tail -n 1 || true)"
+        if [ "$HDMI_4K60" = false ]; then
+            if [ "$current" = hdmi_enable_4kp60=1 ]; then
+                note "4K 60 Hz output is still on: remove hdmi_enable_4kp60=1 from $CONFIG to turn it off"
+            fi
+        elif [ "$current" = hdmi_enable_4kp60=1 ]; then
+            step "4K 60 Hz HDMI output: already on"
+        elif [ ! -f "$CONFIG" ]; then
+            warn "config.txt not found; add hdmi_enable_4kp60=1 to it for 4K 60 Hz output"
+        elif [ -n "$current" ] && [ "$HDMI_4K60" = auto ]; then
+            step "4K 60 Hz HDMI output: left off ($current in $CONFIG; --4k60 turns it on)"
+        else
+            step "Enabling 4K 60 Hz HDMI output (--no-4k60 skips this)"
+            if [ -n "$current" ]; then
+                sudo sed -i 's/^hdmi_enable_4kp60=[0-9]*/hdmi_enable_4kp60=1/' "$CONFIG"
             else
                 printf '\n[all]\nhdmi_enable_4kp60=1\n' | sudo tee -a "$CONFIG" > /dev/null
-                note "added hdmi_enable_4kp60=1 to $CONFIG (use the HDMI 0 port)"
-                REBOOT=true
             fi
-        else
-            note "only needed on a Pi 4 / 400; skipped"
+            note "added hdmi_enable_4kp60=1 to $CONFIG"
+            note "for 4K at 60 Hz, plug the screen into HDMI 0 (on a Pi 4, the port next to the power socket)"
+            BOOT_CHANGED=true
         fi
+    elif [ "$HDMI_4K60" = true ]; then
+        note "--4k60 is only needed on a Pi 4 / 400; skipped"
     fi
 else
     step "Skipping system settings (--no-system)"

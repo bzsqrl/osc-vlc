@@ -122,6 +122,12 @@ At the end, the installer prints the settings for TouchOSC (section 2).
   text console's cursor, boot logo and blanking (it adds
   `consoleblank=0 vt.global_cursor_default=0 logo.nologo` to
   `/boot/firmware/cmdline.txt`).
+- **4K at 60 Hz, Pi 4 / 400:** adds `hdmi_enable_4kp60=1` to
+  `/boot/firmware/config.txt` (applies at the next reboot). Without it a Pi 4
+  outputs 4K at only 30 Hz, so 4K60 videos show at 30 fps. It raises the GPU
+  clock, so the Pi runs a little warmer. Skip it with `--no-4k60`; if
+  `config.txt` already has `hdmi_enable_4kp60=0`, the installer leaves that
+  alone unless you use `--4k60`. The Pi 5 doesn't need it.
 - **USB drives, Lite mode:** adds a udev rule (`/etc/udev/rules.d/99-osc-vlc-usb.rules`,
   with `/usr/local/sbin/osc-vlc-usb-mount`) that mounts USB drives when
   they're plugged in. On the desktop, the desktop does this itself.
@@ -141,7 +147,7 @@ At the end, the installer prints the settings for TouchOSC (section 2).
 | `--lite` | Use Lite mode (see *Desktop or Lite*) |
 | `--desktop` | Use Desktop mode |
 | `--desktop-icon` | Desktop mode: also put the start and stop icons on the desktop |
-| `--4k60` | Pi 4 / 400 only: enable 4K at 60 Hz on HDMI 0 (needs a reboot) |
+| `--no-4k60` | Pi 4 / 400: don't turn on 4K 60 Hz output (see *What the installer does*) |
 | `--no-system` | Skip everything that needs `sudo` |
 | `--uninstall` | Remove the player. Keeps `~/Videos`, `~/venv` and the system settings |
 
@@ -497,10 +503,11 @@ if the source isn't 16:9. Either way, the player stretches it to fill the
 screen (see *Picture shape* in section 1).
 
 ### Model-specific notes
-- **Pi 4, 4K at 60 fps:** plug the screen into **HDMI 0** (the port next to the
-  USB-C power socket) and add `hdmi_enable_4kp60=1` to
-  `/boot/firmware/config.txt`, then reboot. Without it, 4K output is limited to
-  30 Hz. The Pi 5 doesn't need this.
+- **Pi 4, 4K at 60 fps:** plug the screen into **HDMI 0** (on a Pi 4, the port
+  next to the USB-C power socket) and use a screen and cable that support 4K at
+  60 Hz. The installer adds the `hdmi_enable_4kp60=1` setting this needs to
+  `/boot/firmware/config.txt`; reboot once after installing. Without it, 4K
+  output is limited to 30 Hz. The Pi 5 doesn't need this.
 - **Pi Zero / Zero W / Zero 2 W:** 512 MB of RAM is tight for the desktop plus
   VLC, so they use Lite mode. Keep videos to 1080p30 H.264. They have a mini-HDMI port, so you need an adapter.
 - **Pi 2, Pi 3 and the Zeros:** use Lite mode for smooth playback. It also
