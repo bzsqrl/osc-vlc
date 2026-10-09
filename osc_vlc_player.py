@@ -254,6 +254,31 @@ def detect_screen_size():
     return None
 
 
+def check_screen_identified():
+    """Warn about a connected screen that didn't send its EDID (the data saying
+    which resolutions it supports). The Pi then falls back to 1024x768, so the
+    picture is low-resolution and the wrong shape."""
+    try:
+        cmdline = Path("/proc/cmdline").read_text()
+    except OSError:
+        return
+    for status in sorted(Path("/sys/class/drm").glob("card*-HDMI-*/status")):
+        connector = status.parent.name.split("-", 1)[1]  # e.g. HDMI-A-1
+        try:
+            if (status.read_text().strip() != "connected"
+                    or (status.parent / "edid").read_bytes()):
+                continue
+        except OSError:
+            continue
+        if f"video={connector}:" in cmdline:
+            continue  # its mode was set by hand
+        print(f"warning: the screen on {connector} didn't say which resolutions it "
+              "supports, so the Pi falls back to 1024x768. Check for a mixer, switch "
+              "or adapter in between and try another cable, or set the mode by hand "
+              f"by adding e.g. video={connector}:1920x1080@60D to "
+              "/boot/firmware/cmdline.txt (see README, Troubleshooting).")
+
+
 def detect_board():
     """(model name, DECODE_LIMITS key) for this Raspberry Pi, or (None, None)."""
     try:
@@ -1056,6 +1081,7 @@ def main():
         # unwatchably slow. (A --vout in --vlc-args overrides this.)
         print("no desktop session: VLC draws straight to the screen (drm_vout)")
         vlc_args.append("--vout=drm_vout")
+    check_screen_identified()
     aspect = resolve_aspect(args.aspect)
     if aspect:
         print(f"stretching videos to fill the screen (aspect {aspect})")

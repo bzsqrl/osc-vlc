@@ -286,7 +286,8 @@ if $SYSTEM; then
                 printf '\n[all]\nhdmi_enable_4kp60=1\n' | sudo tee -a "$CONFIG" > /dev/null
             fi
             note "added hdmi_enable_4kp60=1 to $CONFIG"
-            note "for 4K at 60 Hz, plug the screen into HDMI 0 (on a Pi 4, the port next to the power socket)"
+            note "for 4K at 60 Hz, plug the screen into HDMI 0: on a bare Pi 4, the port next to"
+            note "the power socket (cases like the Argon ONE put it elsewhere; check the labels)"
             BOOT_CHANGED=true
         fi
     elif [ "$HDMI_4K60" = true ]; then

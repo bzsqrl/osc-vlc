@@ -262,6 +262,24 @@ away, if it had none). USB drives are picked up when they're plugged in.
   `systemctl --user daemon-reload` and restart the player.
 - **Doesn't start at login:** add this line to `~/.config/labwc/autostart`:
   `systemctl --user import-environment DISPLAY WAYLAND_DISPLAY; systemctl --user restart osc-vlc-player &`
+- **Wrong resolution, low-resolution picture, or colour ghosting:** the log
+  says `warning: the screen on HDMI-A-1 didn't say which resolutions it
+  supports`. The screen didn't send its EDID (the data listing its
+  resolutions), so the Pi falls back to 1024x768. Run
+  `cat /sys/class/drm/card*-HDMI-A-*/modes`: a list topped by `1024x768`
+  with `848x480` in it is that fallback. Shrinking 4K video that far can also
+  show a ghostly, shifted colour image over a greyscale one in Lite mode.
+  - Connect the Pi straight to the screen: video mixers, switches and
+    extenders often don't pass the EDID on. Try another cable or adapter.
+  - On a Pi 4, use **HDMI 0**. In a case like the Argon ONE that may not be
+    the socket you'd expect; check the labels.
+  - If the screen still isn't recognised, set its mode by hand: add e.g.
+    `video=HDMI-A-1:1920x1080@60D` to the end of the single line in
+    `/boot/firmware/cmdline.txt`, with the screen's resolution, and reboot.
+    `HDMI-A-1` is HDMI 0 and `HDMI-A-2` is HDMI 1; the `D` turns the output
+    on even without an EDID. For resolutions above 1920x1200, add `R`
+    (e.g. `2560x1600R@60D`). If the screen then stays black, it doesn't
+    accept that mode: remove the setting over SSH and reboot.
 - **Picture shape:** videos are stretched to fill the whole screen. The player
   detects the screen resolution at startup; the log shows e.g.
   `stretching videos to fill the screen (aspect 1920:1200)`. To set the ratio
@@ -510,8 +528,10 @@ if the source isn't 16:9. Either way, the player stretches it to fill the
 screen (see *Picture shape* in section 1).
 
 ### Model-specific notes
-- **Pi 4, 4K at 60 fps:** plug the screen into **HDMI 0** (on a Pi 4, the port
-  next to the USB-C power socket) and use a screen and cable that support 4K at
+- **Pi 4, 4K at 60 fps:** plug the screen into **HDMI 0** (on a bare Pi 4, the
+  port next to the USB-C power socket; cases that bring the ports out to
+  full-size sockets, like the Argon ONE, may put it elsewhere, so check the
+  case's labels) and use a screen and cable that support 4K at
   60 Hz. The installer adds the `hdmi_enable_4kp60=1` setting this needs to
   `/boot/firmware/config.txt`; reboot once after installing. Without it, 4K
   output is limited to 30 Hz. The Pi 5 doesn't need this.
