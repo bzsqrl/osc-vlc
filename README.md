@@ -327,11 +327,15 @@ as above, and press Play. It has a tab for each page along the top:
 
 Each page has:
 - **Status panel (player pages):** current video, time / length, play state,
-  loop mode, volume, and a progress bar. Updates twice a second.
+  loop mode, aspect ratio, and a progress bar. Updates twice a second.
 - **Scrub fader:** drag to any point in the video.
-- **Transport buttons:** previous, play/pause, stop and next.
-- **Skip buttons:** jump by ±1, 5, 10 or 30 seconds.
-- **Loop buttons:** off / all / one, plus restart video and speed 0.5x–2x.
+- **Transport buttons:** previous, restart video (back to its start),
+  play/pause, stop and next.
+- **Skip buttons:** jump back or forward by 5, 20 or 60 seconds.
+- **Loop button:** each tap moves to the next playlist mode: ALL (loop the
+  playlist, the default) → ONE (repeat the current video) → OFF (stop after
+  the last video). On a player page it shows that player's mode.
+- **Speed buttons:** 0.5x, 1x (normal) and 2x.
 - **QUIT PLAYER / QUIT ALL:** quits the player(s). Tap once and the button
   says *TAP AGAIN TO QUIT*. Tap again within 3 seconds to quit. Start the
   player again from the Pi's menu (section 1) or by rebooting.
@@ -341,11 +345,13 @@ Each page has:
 - **Picture:** Fill Screen (stretch), Original Shape (black bars), 16:9 and
   4:3 buttons, plus the Fullscreen toggle. The current aspect ratio is shown
   in the status panel.
-- **Volume fader and Mute toggle.**
+- **Volume:** a Mute toggle, and VOL - / VOL + buttons that turn the volume
+  down or up by 10 (out of 100). Player pages show the current volume.
 
-The toggles and faders don't follow the players: after using Mute on the ALL
-page, the Mute button on a player page may show the opposite state. Press it
-again to bring them back in step.
+The Mute and Fullscreen toggles don't follow the players: after using Mute on
+the ALL page, the Mute button on a player page may show the opposite state.
+Press it again to bring them back in step. Likewise, the ALL page's Loop button
+shows the last mode it set, which a player page may since have changed.
 
 To change the layout (for example the number of players, `DEVICES` at the
 top), edit `build_touchosc_layout.py` and run
@@ -391,6 +397,7 @@ value a second time.
 | `/seek` | float, e.g. `0` | Jump to that time in seconds (`0` = restart video) |
 | `/goto` | integer, e.g. `0` | Play video number N (the first video is `0`) |
 | `/loop` | string: `none`, `all` or `one` | Playlist mode: stop at end / loop playlist / repeat current video |
+| `/volume/step` | integer, e.g. `10` or `-10` | Turn the volume up / down by that much (0–100) |
 | `/aspect` | string: `fill`, `original`, or a ratio like `16:9` | Picture shape: stretch to fill the screen / video's own shape with black bars / force that ratio |
 
 ### Toggle buttons

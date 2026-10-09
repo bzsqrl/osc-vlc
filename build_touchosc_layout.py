@@ -27,6 +27,7 @@ BASE_PORT = 9000          # player n replies on BASE_PORT + n
 W, H = 1024, 768          # size of one page (landscape tablet); TouchOSC scales to fit
 TAB = 50                  # height of the page tab bar above the pages
 MARGIN, GAP = 16, 10
+VOLUME_STEP = 10          # VOL - / VOL + change the volume (0-100) by this much
 
 # --- colours (r, g, b, a) ---------------------------------------------------
 BG = (0.08, 0.08, 0.10, 1)
@@ -51,6 +52,7 @@ local POLL_MS = 500
 local OFFLINE_MS = 2500
 local last = 0
 local status, seen, conns, cache = {}, {}, {}, {}
+local shownLoop = {}            -- loop mode last shown on each player's LOOP button
 
 for n = 1, DEVICES do
   status[n] = {}
@@ -108,7 +110,15 @@ local function refresh(n, now)
   end
   setText(p .. 'lblTime', fmt(s.time) .. ' / ' .. fmt(s.length))
   setText(p .. 'lblState', up(s.state) .. '     loop: ' .. up(s.loop) ..
-    '     vol: ' .. tostring(s.volume or '?') .. '     aspect: ' .. up(s.aspect))
+    '     aspect: ' .. up(s.aspect))
+  local volume = tonumber(s.volume) or -1
+  setText(p .. 'lblVolume', 'volume: ' .. (volume >= 0 and tostring(volume) or '?'))
+  -- show the player's loop mode on its LOOP button (only when it changes)
+  local loopButton = ctl(p .. 'loop')
+  if loopButton and s.loop ~= shownLoop[n] then
+    shownLoop[n] = s.loop
+    loopButton:notify('loop', s.loop)
+  end
   local a, b = tonumber(s.abstart) or -1, tonumber(s.abend) or -1
   if a < 0 then
     setText(p .. 'lblAB', 'A-B loop: off')
@@ -280,11 +290,14 @@ end
 """
 
 
+def lua_connections(devices):
+    """Lua table for sendOSC(): which of TouchOSC's 10 connections to send on."""
+    return "{ " + ", ".join("true" if i in devices else "false" for i in range(1, 11)) + " }"
+
+
 def quit_button(name, frame, text, devices):
     """A QUIT button that sends /quit to `devices` only after a second tap."""
-    lua_connections = "{ " + ", ".join(
-        "true" if i in devices else "false" for i in range(1, 11)) + " }"
-    script = QUIT_SCRIPT % {"connections": lua_connections,
+    script = QUIT_SCRIPT % {"connections": lua_connections(devices),
                             "text": text.replace("\n", "\\n")}
     btn = node("BUTTON", [
         prop("s", "name", name),
@@ -294,6 +307,47 @@ def quit_button(name, frame, text, devices):
         prop("s", "script", script),
     ], [value("x", 0)])
     return btn + label(name + "_lbl", frame, text, size=18)
+
+
+LOOP_SCRIPT = r"""
+-- Loop mode in one button: each tap moves ALL -> ONE -> OFF -> ALL.
+local CONNECTIONS = %(connections)s
+local NEXT = { all = 'one', one = 'none', none = 'all' }
+local NAMES = { all = 'ALL', one = 'ONE', none = 'OFF' }
+local mode = 'all'
+
+local function show()
+  local lbl = self.parent:findByName(self.name .. '_lbl')
+  if lbl then lbl.values.text = 'LOOP\n' .. NAMES[mode] end
+end
+
+function onValueChanged(key)
+  if key ~= 'x' or self.values.x < 1 then return end
+  mode = NEXT[mode]
+  sendOSC({ '/loop', { { tag = 's', value = mode } } }, CONNECTIONS)
+  show()
+end
+
+-- on a player page, the root script passes on the player's own mode
+function onReceiveNotify(key, value)
+  if key == 'loop' and NAMES[value] then
+    mode = value
+    show()
+  end
+end
+"""
+
+
+def loop_button(name, frame, devices):
+    """One button that cycles the loop mode of `devices`: all -> one -> none."""
+    btn = node("BUTTON", [
+        prop("s", "name", name),
+        prop("r", "frame", frame),
+        prop("c", "color", ORANGE),
+        prop("i", "buttonType", 0),
+        prop("s", "script", LOOP_SCRIPT % {"connections": lua_connections(devices)}),
+    ], [value("x", 0)])
+    return btn + label(name + "_lbl", frame, "LOOP\nALL", size=20)
 
 
 def fader(name, frame, color, messages=(), interactive=True, default=0):
@@ -322,10 +376,10 @@ ALL_ROWS = dict(scrub=(196, 56), transport=(262, 100), skip=(372, 70),
                 loop=(452, 70), ab=(532, 60), picture=(602, 60), volume=(672, 80))
 
 
-def controls(p, devices, rows, ab_info, quit_text):
+def controls(p, devices, rows, ab_info, vol_info, quit_text):
     """The control rows shared by every page. `p` prefixes the control names,
-    `devices` are the connections the messages go to, `ab_info` is the control
-    shown to the right of the A-B buttons, next to the QUIT button."""
+    `devices` are the connections the messages go to, `ab_info` and `vol_info`
+    make the controls shown to the right of the A-B and volume buttons."""
     conn = connections(devices)
     c = []
 
@@ -335,9 +389,12 @@ def controls(p, devices, rows, ab_info, quit_text):
     c.append(fader(p + "scrub", (MARGIN + 130, y, W - 2 * MARGIN - 130, h), TEAL,
                    [osc("/position", [partial("VALUE", "FLOAT", "x")], conn)]))
 
-    # Transport
-    for frame, (name, text, color, path) in zip(row(*rows["transport"], n=4), [
-        ("prev", "<<  PREV", BLUE, "/prev"),
+    # Transport, with restart (back to the start of the video) after PREV
+    prev, restart, *rest = row(*rows["transport"], n=5)
+    c.append(button(p + "prev", prev, "<<  PREV", BLUE, "/prev", conn))
+    c.append(button(p + "restart", restart, "RESTART\nVIDEO", GREY, "/seek", conn,
+                    ("FLOAT", 0)))
+    for frame, (name, text, color, path) in zip(rest, [
         ("toggle", "PLAY / PAUSE", GREEN, "/toggle"),
         ("stop", "STOP", RED, "/stop"),
         ("next", "NEXT  >>", BLUE, "/next"),
@@ -345,22 +402,15 @@ def controls(p, devices, rows, ab_info, quit_text):
         c.append(button(p + name, frame, text, color, path, conn))
 
     # Skip buttons
-    skips = [-30, -10, -5, -1, 1, 5, 10, 30]
+    skips = [-60, -20, -5, 5, 20, 60]
     for frame, s in zip(row(*rows["skip"], n=len(skips)), skips):
         c.append(button(f"{p}skip{s:+d}", frame, f"{s:+d}s", GREY, "/skip", conn,
                         ("FLOAT", s)))
 
-    # Loop mode + restart + playback speed
-    y, h = rows["loop"]
-    left = row(y, h, x1=W / 2 - GAP / 2, n=4)
-    right = row(y, h, x0=W / 2 + GAP / 2, n=4)
-    for frame, (mode, text) in zip(left, [("none", "LOOP\nOFF"), ("all", "LOOP\nALL"),
-                                          ("one", "LOOP\nONE")]):
-        c.append(button(f"{p}loop_{mode}", frame, text, ORANGE, "/loop", conn,
-                        ("STRING", mode)))
-    c.append(button(p + "restart", left[3], "RESTART\nVIDEO", GREY, "/seek", conn,
-                    ("FLOAT", 0)))
-    for frame, r in zip(right, [0.5, 1, 1.5, 2]):
+    # Loop mode (one button: all -> one -> off) + playback speed
+    loop, *speeds = row(*rows["loop"], n=4)
+    c.append(loop_button(p + "loop", loop, devices))
+    for frame, r in zip(speeds, [0.5, 1, 2]):
         c.append(button(f"{p}rate{r}", frame, f"SPEED\n{r}x", PURPLE, "/rate", conn,
                         ("FLOAT", r)))
 
@@ -377,9 +427,9 @@ def controls(p, devices, rows, ab_info, quit_text):
     c.append(quit_button(p + "quit", (W - MARGIN - QUIT_W, y, QUIT_W, h), quit_text,
                          devices))
 
-    # Picture: aspect ratio buttons, fullscreen and mute toggles
-    y, h = rows["picture"]
-    for frame, (mode, text) in zip(row(y, h, x1=W / 2 - GAP / 2, n=4), [
+    # Picture: aspect ratio buttons and the fullscreen toggle
+    *aspects, full = row(*rows["picture"], n=5)
+    for frame, (mode, text) in zip(aspects, [
         ("fill", "FILL\nSCREEN"),
         ("original", "ORIGINAL\nSHAPE"),
         ("16:9", "16:9"),
@@ -387,17 +437,19 @@ def controls(p, devices, rows, ab_info, quit_text):
     ]):
         c.append(button(f"{p}aspect_{mode.replace(':', 'x')}", frame, text, GOLD,
                         "/aspect", conn, ("STRING", mode)))
-    toggles = row(y, h, x0=W / 2 + GAP / 2, n=2)
-    c.append(button(p + "fullscreen", toggles[0], "FULL\nSCREEN", GREY, "/fullscreen",
+    c.append(button(p + "fullscreen", full, "FULL\nSCREEN", GREY, "/fullscreen",
                     conn, toggle=True, default=1))
-    c.append(button(p + "mute", toggles[1], "MUTE", RED, "/mute", conn, toggle=True))
 
-    # Volume
+    # Volume: mute toggle, down / up in steps, and `vol_info` to their right
     y, h = rows["volume"]
     c.append(label(p + "vol_cap", (MARGIN, y, 120, h), "VOLUME", size=16, color=DIM_TEXT))
-    c.append(fader(p + "volume", (MARGIN + 130, y, W - 2 * MARGIN - 130, h), GREEN,
-                   [osc("/volume", [partial("VALUE", "INTEGER", "x", scale=(0, 100))], conn)],
-                   default=1))
+    mute, down, up, info = row(y, h, x0=MARGIN + 130, n=4)
+    c.append(button(p + "mute", mute, "MUTE", RED, "/mute", conn, toggle=True))
+    c.append(button(p + "vol_down", down, "VOL  -", GREEN, "/volume/step", conn,
+                    ("INTEGER", -VOLUME_STEP)))
+    c.append(button(p + "vol_up", up, "VOL  +", GREEN, "/volume/step", conn,
+                    ("INTEGER", VOLUME_STEP)))
+    c.append(vol_info(info))
     return c
 
 
@@ -427,8 +479,12 @@ def device_page(n):
               size=16, color=DIM_TEXT, background=True),
         fader(p + "progress", (MARGIN, 110, W - 2 * MARGIN, 14), TEAL, interactive=False),
     ]
-    c += controls(p, [n], DEVICE_ROWS, lambda frame: label(
-        p + "lblAB", frame, "A-B loop: off", size=18, background=True), "QUIT\nPLAYER")
+    c += controls(p, [n], DEVICE_ROWS,
+                  lambda frame: label(p + "lblAB", frame, "A-B loop: off", size=18,
+                                      background=True),
+                  lambda frame: label(p + "lblVolume", frame, "volume: ?", size=18,
+                                      background=True),
+                  "QUIT\nPLAYER")
     return page(str(n), c, BLUE)
 
 
@@ -443,9 +499,13 @@ def all_page():
         y = 16 + ((n - 1) % per_col) * 44
         c.append(label(f"all_dev{n}", (x, y, w, 38), f"{n}    not connected",
                        size=15, color=DIM_TEXT, background=True))
-    c += controls(p, list(range(1, DEVICES + 1)), ALL_ROWS, lambda frame: label(
-        p + "info", frame, f"Everything on this page\ngoes to all {DEVICES} players",
-        size=16, color=DIM_TEXT), "QUIT\nALL")
+    c += controls(p, list(range(1, DEVICES + 1)), ALL_ROWS,
+                  lambda frame: label(p + "info", frame, "Everything on this page\n"
+                                      f"goes to all {DEVICES} players",
+                                      size=16, color=DIM_TEXT),
+                  lambda frame: label(p + "vol_info", frame, "changes every\n"
+                                      f"player by {VOLUME_STEP}", size=16, color=DIM_TEXT),
+                  "QUIT\nALL")
     return page("ALL", c, GOLD)
 
 

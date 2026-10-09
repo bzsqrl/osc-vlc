@@ -31,6 +31,7 @@ OSC address map (all arguments optional unless noted):
     /skip        <float>     seek relative to current time, in seconds (+/-)
     /position    <float>     seek to position 0.0 - 1.0
     /volume      <int>       set volume 0 - 100
+    /volume/step <int>       change volume by that much (+/-)
     /mute        [int]       1 = mute, 0 = unmute, no arg = toggle
     /rate        <float>     playback speed (1.0 = normal)
     /loop        <str>       playlist mode: "none", "all", or "one"
@@ -730,6 +731,13 @@ class VideoController:
         self.player.audio_set_volume(min(max(int(level), 0), 100))
 
     @locked
+    def volume_step(self, delta):
+        current = self.player.audio_get_volume()
+        if current < 0:  # no audio output yet (nothing playing)
+            current = 100
+        self.volume(current + int(delta))
+
+    @locked
     def mute(self, state=None):
         if state is None:
             self.player.audio_toggle_mute()
@@ -918,6 +926,7 @@ def build_dispatcher(ctrl, reply_port, shutdown):
     value("/skip", ctrl.skip)
     value("/position", ctrl.position)
     value("/volume", ctrl.volume)
+    value("/volume/step", ctrl.volume_step)
     value("/mute", ctrl.mute, optional=True)
     value("/rate", ctrl.rate)
     value("/loop", ctrl.loop)
