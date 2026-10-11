@@ -42,6 +42,7 @@ PURPLE = (0.55, 0.35, 0.80, 1)
 GREY = (0.40, 0.40, 0.45, 1)
 TEAL = (0.15, 0.60, 0.65, 1)
 GOLD = (0.75, 0.60, 0.15, 1)
+PINK = (0.80, 0.30, 0.55, 1)
 
 ROOT_SCRIPT = r"""
 -- Poll every player for status and show it on its page and on the ALL page.
@@ -134,8 +135,36 @@ local function refresh(n, now)
   end
 end
 
+-- the ALL page's info text, and when a SYNC message there goes back to it
+local INFO = 'Everything on this page\ngoes to all ' .. DEVICES .. ' players'
+local infoUntil = -1
+
+local function showInfo(text)
+  setText('all_info', text)
+  infoUntil = getMillis() + 4000
+end
+
+-- SYNC on the ALL page: the first player that's playing is the master, and
+-- every other playing player jumps to its position
+function onReceiveNotify(key)
+  if key ~= 'sync' then return end
+  local now = getMillis()
+  for n = 1, DEVICES do
+    if seen[n] >= 0 and now - seen[n] <= OFFLINE_MS and status[n].state == 'playing' then
+      sendOSC('/sync', conns[n])
+      showInfo('SYNC: all players to\nplayer ' .. n .. "'s position")
+      return
+    end
+  end
+  showInfo('SYNC: no player\nis playing')
+end
+
 function update()
   local now = getMillis()
+  if infoUntil >= 0 and now > infoUntil then
+    infoUntil = -1
+    setText('all_info', INFO)
+  end
   if now - last < POLL_MS then return end
   last = now
   for n = 1, DEVICES do
@@ -350,6 +379,26 @@ def loop_button(name, frame, devices):
     return btn + label(name + "_lbl", frame, "LOOP\nALL", size=20)
 
 
+SYNC_ALL_SCRIPT = r"""
+-- SYNC on the ALL page: the root script picks the master (the first player
+-- that's playing) and sends it /sync
+function onValueChanged(key)
+  if key == 'x' and self.values.x >= 1 then root:notify('sync') end
+end
+"""
+
+
+def sync_all_button(name, frame):
+    btn = node("BUTTON", [
+        prop("s", "name", name),
+        prop("r", "frame", frame),
+        prop("c", "color", PINK),
+        prop("i", "buttonType", 0),
+        prop("s", "script", SYNC_ALL_SCRIPT),
+    ], [value("x", 0)])
+    return btn + label(name + "_lbl", frame, "SYNC", size=20)
+
+
 def fader(name, frame, color, messages=(), interactive=True, default=0):
     return node("FADER", [
         prop("s", "name", name),
@@ -407,12 +456,18 @@ def controls(p, devices, rows, ab_info, vol_info, quit_text):
         c.append(button(f"{p}skip{s:+d}", frame, f"{s:+d}s", GREY, "/skip", conn,
                         ("FLOAT", s)))
 
-    # Loop mode (one button: all -> one -> off) + playback speed
-    loop, *speeds = row(*rows["loop"], n=4)
+    # Loop mode (one button: all -> one -> off), playback speed, and SYNC:
+    # every playing player jumps to the position of this page's player (on
+    # the ALL page, of the first player that's playing)
+    loop, *speeds, sync = row(*rows["loop"], n=5)
     c.append(loop_button(p + "loop", loop, devices))
     for frame, r in zip(speeds, [0.5, 1, 2]):
         c.append(button(f"{p}rate{r}", frame, f"SPEED\n{r}x", PURPLE, "/rate", conn,
                         ("FLOAT", r)))
+    if len(devices) > 1:
+        c.append(sync_all_button(p + "sync", sync))
+    else:
+        c.append(button(p + "sync", sync, "SYNC", PINK, "/sync", conn))
 
     # A-B loop: set A, set B (starts looping), clear, and a readout / note
     y, h = rows["ab"]

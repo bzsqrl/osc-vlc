@@ -45,6 +45,10 @@ OSC address map (all arguments optional unless noted):
     /ab/set  <float> <float> set A and B explicitly, in seconds
     /status      [int]       reply with state to sender, on the given port
                              (default: --reply-port)
+    /sync                    make every playing player on the network jump to
+                             this player's playback position (once)
+    /sync/to <int> <str>     sent between players by /sync: jump to that time
+                             (ms), unless it's past the end of this video
     /quit                    shut down the player
 
 GPIO controls (BCM pin numbers, override with --pin-* options):
@@ -68,6 +72,7 @@ import os
 import re
 import subprocess
 import signal
+import socket
 import sys
 import threading
 import time
@@ -75,6 +80,7 @@ from pathlib import Path
 
 import vlc
 from pythonosc.dispatcher import Dispatcher
+from pythonosc.osc_message_builder import OscMessageBuilder
 from pythonosc.osc_server import BlockingOSCUDPServer
 from pythonosc.udp_client import SimpleUDPClient
 
@@ -113,6 +119,10 @@ FULLSCREEN_DELAY_SECONDS = 0.5
 
 # Warn if a video has been playing this long without VLC managing to show it.
 NO_PICTURE_SECONDS = 5
+
+# /sync: where the master player sends its playback position. The broadcast
+# address reaches every player on the local network.
+SYNC_ADDRESS = "255.255.255.255"
 
 # USB drives: the desktop mounts them under /media/<user>/, and in Lite mode
 # install.sh's udev rule mounts them under /media/usb/. Checked this often.
@@ -638,6 +648,30 @@ class VideoController:
         self._clear_seek()
         self.player.set_position(min(max(float(pos), 0.0), 1.0))
 
+    # --- sync ------------------------------------------------------------------
+
+    @locked
+    def sync_position(self):
+        """Playback time in ms for other players to sync to, or None if not playing."""
+        if self.player.get_state() != vlc.State.Playing:
+            return None
+        return self._now_ms()
+
+    @locked
+    def sync_to(self, ms):
+        """Jump to `ms`, if playing and this video is long enough. Returns
+        whether it jumped."""
+        if self.player.get_state() != vlc.State.Playing:
+            print("sync: not playing, ignored")
+            return False
+        length = self.player.get_length()
+        if length > 0 and ms >= length:
+            print(f"sync: {ms / 1000:.2f}s is past the end of this video "
+                  f"({length / 1000:.2f}s), ignored")
+            return False
+        self.seek(ms / 1000)
+        return True
+
     # --- A-B loop ----------------------------------------------------------
 
     @locked
@@ -914,7 +948,55 @@ class GpioControls:
             device.close()
 
 
-def build_dispatcher(ctrl, reply_port, shutdown):
+class Sync:
+    """One-off playback sync between players (/sync). The player that gets
+    /sync is the master: it sends its playback time to the others as
+    /sync/to, and they jump to it. The master jumps to that same time at the
+    same moment, so every player goes through the same seek and they line up
+    closely. Nothing is adjusted afterwards, until /sync is sent again."""
+
+    def __init__(self, ctrl, addresses, port):
+        self.ctrl = ctrl
+        self.addresses = addresses
+        self.port = port
+        # tells this player's own broadcast apart from other players'
+        self.id = f"{socket.gethostname()}-{os.getpid()}"
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+    def lead(self):
+        ms = self.ctrl.sync_position()
+        if ms is None:
+            print("sync: this player isn't playing, so there's nothing to sync to")
+            return
+        builder = OscMessageBuilder("/sync/to")
+        builder.add_arg(int(ms), "i")
+        builder.add_arg(self.id, "s")
+        message = builder.build().dgram
+        for address in self.addresses:
+            try:
+                self.sock.sendto(message, (address, self.port))
+            except OSError as e:
+                print(f"sync: couldn't send to {address}: {e}")
+        self.ctrl.sync_to(ms)
+        print(f"sync: master, all players to {ms / 1000:.2f}s")
+
+    def follow(self, addr, *args):
+        try:
+            ms, sender = int(args[0]), str(args[1])
+        except (IndexError, TypeError, ValueError):
+            print(f"{addr}: expected a time in ms and a sender, got {args}")
+            return
+        if sender == self.id:
+            return  # our own broadcast, looped back
+        if self.ctrl.sync_to(ms):
+            print(f"sync: to {ms / 1000:.2f}s, from {sender}")
+
+    def close(self):
+        self.sock.close()
+
+
+def build_dispatcher(ctrl, reply_port, shutdown, sync):
     dispatcher = Dispatcher()
 
     def trigger(address, method):
@@ -984,6 +1066,8 @@ def build_dispatcher(ctrl, reply_port, shutdown):
 
     dispatcher.map("/status", status_handler, needs_reply_address=True)
     dispatcher.map("/quit", lambda addr, *args: shutdown())
+    trigger("/sync", sync.lead)
+    dispatcher.map("/sync/to", sync.follow)
     dispatcher.set_default_handler(lambda addr, *args: print(f"unhandled: {addr} {args}"))
     return dispatcher
 
@@ -1042,6 +1126,13 @@ def main():
                         help="fully restart VLC's video output when changing videos: "
                              '"auto" (default) only when the next video has a different '
                              'codec, resolution or frame rate, "always", or "never"')
+    parser.add_argument("--sync-address", action="append", metavar="ADDRESS",
+                        help="where /sync sends this player's position to the other "
+                             f"players (default: {SYNC_ADDRESS}, everyone on the local "
+                             "network). Repeat it to list players' IP addresses "
+                             "instead, e.g. on a network that blocks broadcasts")
+    parser.add_argument("--sync-port", type=int,
+                        help="the port the other players listen on (default: --port)")
     parser.add_argument("--no-usb", action="store_true",
                         help="don't play videos from USB drives")
     parser.add_argument("--debug", action="store_true",
@@ -1106,7 +1197,8 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    dispatcher = build_dispatcher(ctrl, args.reply_port, shutdown)
+    sync = Sync(ctrl, args.sync_address or [SYNC_ADDRESS], args.sync_port or args.port)
+    dispatcher = build_dispatcher(ctrl, args.reply_port, shutdown, sync)
     # Blocking server handles one OSC message at a time
     server = BlockingOSCUDPServer((args.ip, args.port), dispatcher)
 
@@ -1140,6 +1232,7 @@ def main():
         closing.set()
         source_thread.join()
         server.server_close()
+        sync.close()
         if gpio:
             gpio.close()
         ctrl.release()

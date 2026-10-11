@@ -10,6 +10,8 @@ rotary encoder.
 - **Ready-made TouchOSC layout:** controls up to 8 Pis, one page each, plus a
   page that controls them all at once.
 - **Hardware controls:** GPIO buttons and a rotary encoder for seeking.
+- **Sync:** one button lines up every playing Pi on the network to the same
+  playback position.
 - **USB drives:** plug in a drive with videos and it plays those instead,
   until it's pulled out again.
 - **Unattended use:** starts fullscreen at boot and restarts itself after a crash.
@@ -354,6 +356,8 @@ Each page has:
   playlist, the default) → ONE (repeat the current video) → OFF (stop after
   the last video). On a player page it shows that player's mode.
 - **Speed buttons:** 0.5x, 1x (normal) and 2x.
+- **SYNC:** every player that's playing jumps to the same playback position
+  (see *Syncing players* below).
 - **QUIT PLAYER / QUIT ALL:** quits the player(s). Tap once and the button
   says *TAP AGAIN TO QUIT*. Tap again within 3 seconds to quit. Start the
   player again from the Pi's menu (section 1) or by rebooting.
@@ -370,6 +374,38 @@ The Mute and Fullscreen toggles don't follow the players: after using Mute on
 the ALL page, the Mute button on a player page may show the opposite state.
 Press it again to bring them back in step. Likewise, the ALL page's Loop button
 shows the last mode it set, which a player page may since have changed.
+
+### Syncing players
+Press **SYNC** to line up the players' playback positions:
+- **On a player page,** that player is the master. Every other player on the
+  network that's playing jumps to the master's current time in its own video.
+- **On the ALL page,** the master is the first player (1, 2, 3 ...) whose
+  status says it's playing. The page names it for a few seconds where it
+  normally says *Everything on this page goes to all 8 players*.
+- **Players that ignore it:** players that are paused or stopped, and players
+  whose current video is shorter than the master's time. Those carry on as
+  they were.
+- **It happens once per press.** The players then run on their own and can
+  slowly drift apart again. Press SYNC again to line them back up.
+
+It works with any mix of videos, formats and lengths. The master sends its
+time straight to the other players, so it reaches every player on the local
+network, not just those set up in TouchOSC. The master jumps to that same time
+at the same moment, so every player goes through the same short seek and they
+end up closely in step. How closely depends on the network and the videos:
+- **Wired Ethernet** gives the best result. Over Wi-Fi the message can arrive
+  a little later at some players.
+- **Same video files** on every player line up best. Different formats take
+  slightly different times to jump.
+
+The master sends to port 9000 at every address on the network (a broadcast).
+If your players listen on another port, or the network blocks broadcasts,
+add `--sync-port` or `--sync-address` to the end of the `ExecStart=` line (as
+for `--aspect` in section 1, *Troubleshooting*). `--sync-address` can be given
+once per player, with each player's IP address:
+```
+--sync-address 192.168.1.51 --sync-address 192.168.1.52 --sync-address 192.168.1.53
+```
 
 To change the layout (for example the number of players, `DEVICES` at the
 top), edit `build_touchosc_layout.py` and run
@@ -399,6 +435,7 @@ press and ignores the release, so each tap acts once.
 | `/ab/b` | A-B loop: set B (loop end) at the current time and start looping |
 | `/ab/clear` | A-B loop: clear |
 | `/ab` | A-B loop in one button: 1st press sets A, 2nd sets B, 3rd clears |
+| `/sync` | Every playing player on the network jumps to this player's position (see *Syncing players*) |
 
 An A-B loop plays the section between A and B over and over. It clears itself
 when the player stops or moves to another video. To set exact times from
