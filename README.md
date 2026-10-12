@@ -32,8 +32,9 @@ Built on VLC ([python-vlc](https://pypi.org/project/python-vlc/)) and
 | `osc-vlc-player.desktop` | Autostart entry that starts the service at login |
 | `osc-vlc-player-launcher.desktop`, `osc-vlc-player-stop.desktop` | Start / stop entries for the desktop menu |
 | `osc-vlc-usb-mount`, `99-osc-vlc-usb.rules` | Lite mode: mount USB drives when they're plugged in |
-| `osc_vlc_player.tosc` | TouchOSC layout (section 2) |
-| `build_touchosc_layout.py` | Generates the TouchOSC layout |
+| `osc_vlc_player.tosc` | TouchOSC layout for tablets (section 2) |
+| `osc_vlc_player_phone.tosc` | TouchOSC layout for phones, portrait (section 2) |
+| `build_touchosc_layout.py`, `build_touchosc_phone.py` | Generate the two TouchOSC layouts |
 
 Released under the [MIT License](LICENSE).
 
@@ -336,9 +337,14 @@ away, if it had none). USB drives are picked up when they're plugged in.
 4. Test it: add a button with the address `/toggle`, run the layout and press
    it. The video should pause and resume.
 
-### Ready-made layout
-Open `osc_vlc_player.tosc` in TouchOSC (File → Open), set up the connections
-as above, and press Play. It has a tab for each page along the top:
+### Ready-made layouts
+There are two, with the same controls and pages:
+- `osc_vlc_player.tosc` for **tablets** (landscape),
+- `osc_vlc_player_phone.tosc` for **phones** (portrait; see *Phone layout*
+  below).
+
+Open one in TouchOSC (File → Open), set up the connections as above, and press
+Play. Each has a tab for each page along the top:
 - **ALL:** every button and fader goes to all 10 players at once. Instead of
   the full status panel it shows one line per player: play state, time and
   video, or `not connected` / `NO REPLY`.
@@ -419,10 +425,35 @@ once per player, with each player's IP address:
 --sync-address 192.168.1.51 --sync-address 192.168.1.52 --sync-address 192.168.1.53
 ```
 
-To change the layout (for example the number of players, `DEVICES` at the
-top), edit `build_touchosc_layout.py` and run
-`python build_touchosc_layout.py` to regenerate the file, or edit it directly in
-the TouchOSC editor. The sections below describe how the controls are set up.
+### Phone layout
+`osc_vlc_player_phone.tosc` puts the same controls in one column for a phone
+held upright: a large PLAY / PAUSE in the middle of the screen, every other
+button at least thumb-sized, and the status at the top. On the player pages,
+QUIT PLAYER sits at the bottom right, out of the way (it still needs two
+taps).
+
+It's 540 x 1110 units, the shape left for the layout on a tall modern phone
+once the phone's status bar, gesture bar and TouchOSC's toolbar have taken
+their share. TouchOSC scales it to fit, so it fills the screen on:
+- **Pixel 6, 7 (including the 7a), 8 and 9** (20:9 screens),
+- **Samsung Galaxy S21 to S25 and the A series** (19.5:9 and 20:9),
+- **iPhone X to 16** (19.5:9; on the small mini models the text is smaller).
+
+Other phones still work, with a narrow empty band at the top and bottom or at
+the sides:
+- **Older or compact phones with 16:9 screens** (iPhone SE, iPhone 8 and
+  earlier) show it smaller, with bands at the sides. Text gets small but stays
+  usable.
+- **Extra-tall phones** (21:9, such as Sony Xperia and the Galaxy Z Flip) show
+  bands at the top and bottom.
+- **Foldables opened up** (Galaxy Z Fold, Pixel Fold): use the tablet layout.
+- **Tablets:** use the tablet layout.
+
+To change the layouts (for example the number of players, `DEVICES` at the
+top of `build_touchosc_layout.py`, which both use), edit the build scripts and
+run `python build_touchosc_layout.py` and `python build_touchosc_phone.py` to
+regenerate the files, or edit them directly in the TouchOSC editor. The
+sections below describe how the controls are set up.
 
 ---
 
