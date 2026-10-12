@@ -45,10 +45,9 @@ OSC address map (all arguments optional unless noted):
     /ab/set  <float> <float> set A and B explicitly, in seconds
     /status      [int]       reply with state to sender, on the given port
                              (default: --reply-port)
-    /sync                    make every playing player on the network jump to
-                             this player's playback position (once)
-    /sync/to <int> <str>     sent between players by /sync: jump to that time
-                             (ms), unless it's past the end of this video
+    /sync                    line up every player on the network with this
+                             one: same position, and playing or paused like it
+    /sync/prepare, /sync/go  sent between players by /sync (see class Sync)
     /quit                    shut down the player
 
 GPIO controls (BCM pin numbers, override with --pin-* options):
@@ -123,6 +122,9 @@ NO_PICTURE_SECONDS = 5
 # /sync: where the master player sends its playback position. The broadcast
 # address reaches every player on the local network.
 SYNC_ADDRESS = "255.255.255.255"
+# How long /sync holds every player paused before they play again. Long enough
+# for the slowest player to jump; on a Pi 4 a jump in 4K HEVC can take ~1 s.
+SYNC_HOLD_SECONDS = 1.5
 
 # USB drives: the desktop mounts them under /media/<user>/, and in Lite mode
 # install.sh's udev rule mounts them under /media/usb/. Checked this often.
@@ -652,25 +654,37 @@ class VideoController:
 
     @locked
     def sync_position(self):
-        """Playback time in ms for other players to sync to, or None if not playing."""
-        if self.player.get_state() != vlc.State.Playing:
+        """(time in ms, playing?) for other players to sync to, or None if
+        there's no video to sync to (stopped)."""
+        state = self.player.get_state()
+        if state not in (vlc.State.Playing, vlc.State.Paused):
             return None
-        return self._now_ms()
+        return self._now_ms(), state == vlc.State.Playing
 
     @locked
-    def sync_to(self, ms):
-        """Jump to `ms`, if playing and this video is long enough. Returns
-        whether it jumped."""
-        if self.player.get_state() != vlc.State.Playing:
-            print("sync: not playing, ignored")
+    def sync_prepare(self, ms):
+        """Pause and jump to `ms`, ready for sync_resume(). Skipped (returns
+        False) if stopped, or if this video is shorter than `ms`."""
+        state = self.player.get_state()
+        if state not in (vlc.State.Playing, vlc.State.Paused):
+            print("sync: no video playing or paused, ignored")
             return False
         length = self.player.get_length()
         if length > 0 and ms >= length:
             print(f"sync: {ms / 1000:.2f}s is past the end of this video "
                   f"({length / 1000:.2f}s), ignored")
             return False
+        # VLC finishes the jump while paused (decoding from the last keyframe
+        # up to `ms`, which takes a different time on each player), so all
+        # players can then start playing again together
+        self.player.set_pause(1)
         self.seek(ms / 1000)
         return True
+
+    @locked
+    def sync_resume(self):
+        if self.player.get_state() == vlc.State.Paused:
+            self.player.set_pause(0)
 
     # --- A-B loop ----------------------------------------------------------
 
@@ -949,50 +963,123 @@ class GpioControls:
 
 
 class Sync:
-    """One-off playback sync between players (/sync). The player that gets
-    /sync is the master: it sends its playback time to the others as
-    /sync/to, and they jump to it. The master jumps to that same time at the
-    same moment, so every player goes through the same seek and they line up
-    closely. Nothing is adjusted afterwards, until /sync is sent again."""
+    """One-off playback sync between players (/sync), in two steps.
 
-    def __init__(self, ctrl, addresses, port):
+    The player that gets /sync is the master. It sends its playback time to
+    the others (/sync/prepare), and every player, the master included, pauses
+    and jumps to that time. A jump takes each player a different time (VLC
+    decodes from the last keyframe), so the master then waits `hold` seconds
+    for all of them to finish, and sends /sync/go: every player starts playing
+    again at once. If the master was paused, they all stay paused instead.
+    Nothing is adjusted afterwards, until /sync is sent again."""
+
+    REPEAT = 3        # each message is sent this many times, in case one is lost
+    GIVE_UP = 3.0     # a player resumes by itself if /sync/go is this late
+
+    def __init__(self, ctrl, addresses, port, hold):
         self.ctrl = ctrl
         self.addresses = addresses
         self.port = port
-        # tells this player's own broadcast apart from other players'
+        self.hold = hold
+        # tells this player's own broadcasts apart from other players'
         self.id = f"{socket.gethostname()}-{os.getpid()}"
+        self.count = 0
+        self.lock = threading.Lock()
+        self.round = None   # the sync this player has prepared for, until /sync/go
+        self.last_round = None  # the last /sync/prepare acted on, to skip repeats
+        self.resume = False
+        self.timer = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-    def lead(self):
-        ms = self.ctrl.sync_position()
-        if ms is None:
-            print("sync: this player isn't playing, so there's nothing to sync to")
-            return
-        builder = OscMessageBuilder("/sync/to")
-        builder.add_arg(int(ms), "i")
-        builder.add_arg(self.id, "s")
+    def _send(self, path, *args):
+        builder = OscMessageBuilder(path)
+        for arg in args:
+            builder.add_arg(arg, "i" if isinstance(arg, int) else "s")
         message = builder.build().dgram
-        for address in self.addresses:
-            try:
-                self.sock.sendto(message, (address, self.port))
-            except OSError as e:
-                print(f"sync: couldn't send to {address}: {e}")
-        self.ctrl.sync_to(ms)
-        print(f"sync: master, all players to {ms / 1000:.2f}s")
+        for _ in range(self.REPEAT):
+            for address in self.addresses:
+                try:
+                    self.sock.sendto(message, (address, self.port))
+                except OSError as e:
+                    print(f"sync: couldn't send to {address}: {e}")
+                    return
 
-    def follow(self, addr, *args):
-        try:
-            ms, sender = int(args[0]), str(args[1])
-        except (IndexError, TypeError, ValueError):
-            print(f"{addr}: expected a time in ms and a sender, got {args}")
+    def _wait_for_go(self, sync_round, resume, timeout):
+        """Remember the sync this player is in, and when to resume by itself."""
+        with self.lock:
+            if self.timer:
+                self.timer.cancel()
+            self.round, self.resume = sync_round, resume
+            self.timer = threading.Timer(timeout, self._go, [sync_round])
+            self.timer.daemon = True
+            self.timer.start()
+
+    def _go(self, sync_round):
+        with self.lock:
+            if sync_round != self.round:
+                return  # already started, or replaced by a newer sync
+            self.round = None
+            if self.timer:
+                self.timer.cancel()
+            resume = self.resume
+        if resume:
+            self.ctrl.sync_resume()
+
+    def lead(self):
+        """/sync from TouchOSC: this player is the master."""
+        position = self.ctrl.sync_position()
+        if position is None:
+            print("sync: this player has no video playing or paused, nothing to sync to")
             return
-        if sender == self.id:
-            return  # our own broadcast, looped back
-        if self.ctrl.sync_to(ms):
-            print(f"sync: to {ms / 1000:.2f}s, from {sender}")
+        ms, playing = position
+        self.count += 1
+        sync_round = f"{self.id}:{self.count}"
+        self._send("/sync/prepare", int(ms), int(playing), sync_round, self.id)
+        self.ctrl.sync_prepare(ms)
+        print(f"sync: master, all players to {ms / 1000:.2f}s"
+              + (f", playing in {self.hold:g}s" if playing else ", paused"))
+        if playing:
+            self._wait_for_go(sync_round, True, self.hold + self.GIVE_UP)
+            threading.Thread(target=self._lead_go, args=(sync_round,), daemon=True).start()
+
+    def _lead_go(self, sync_round):
+        time.sleep(self.hold)
+        with self.lock:
+            if sync_round != self.round:
+                return  # replaced by a newer sync
+        # start the others, then this player: the message takes well under
+        # a millisecond on a wired network
+        self._send("/sync/go", sync_round, self.id)
+        self._go(sync_round)
+
+    def follow_prepare(self, addr, *args):
+        try:
+            ms, playing, sync_round, sender = int(args[0]), bool(args[1]), str(args[2]), str(args[3])
+        except (IndexError, TypeError, ValueError):
+            print(f"{addr}: expected time, playing, round and sender, got {args}")
+            return
+        if sender == self.id or sync_round == self.last_round:
+            return  # our own broadcast looped back, or a repeat
+        self.last_round = sync_round
+        if self.ctrl.sync_prepare(ms):
+            print(f"sync: to {ms / 1000:.2f}s from {sender}"
+                  + (", playing on its signal" if playing else ", paused"))
+            self._wait_for_go(sync_round, playing, self.hold + self.GIVE_UP)
+
+    def follow_go(self, addr, *args):
+        try:
+            sync_round, sender = str(args[0]), str(args[1])
+        except (IndexError, TypeError, ValueError):
+            print(f"{addr}: expected round and sender, got {args}")
+            return
+        if sender != self.id:
+            self._go(sync_round)
 
     def close(self):
+        with self.lock:
+            if self.timer:
+                self.timer.cancel()
         self.sock.close()
 
 
@@ -1067,7 +1154,8 @@ def build_dispatcher(ctrl, reply_port, shutdown, sync):
     dispatcher.map("/status", status_handler, needs_reply_address=True)
     dispatcher.map("/quit", lambda addr, *args: shutdown())
     trigger("/sync", sync.lead)
-    dispatcher.map("/sync/to", sync.follow)
+    dispatcher.map("/sync/prepare", sync.follow_prepare)
+    dispatcher.map("/sync/go", sync.follow_go)
     dispatcher.set_default_handler(lambda addr, *args: print(f"unhandled: {addr} {args}"))
     return dispatcher
 
@@ -1131,6 +1219,10 @@ def main():
                              f"players (default: {SYNC_ADDRESS}, everyone on the local "
                              "network). Repeat it to list players' IP addresses "
                              "instead, e.g. on a network that blocks broadcasts")
+    parser.add_argument("--sync-hold", type=float, default=SYNC_HOLD_SECONDS,
+                        help="how long /sync holds every player paused, for the "
+                             "slowest one to finish jumping, before they all play "
+                             f"again (default: {SYNC_HOLD_SECONDS:g} seconds)")
     parser.add_argument("--sync-port", type=int,
                         help="the port the other players listen on (default: --port)")
     parser.add_argument("--no-usb", action="store_true",
@@ -1197,7 +1289,8 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    sync = Sync(ctrl, args.sync_address or [SYNC_ADDRESS], args.sync_port or args.port)
+    sync = Sync(ctrl, args.sync_address or [SYNC_ADDRESS], args.sync_port or args.port,
+                args.sync_hold)
     dispatcher = build_dispatcher(ctrl, args.reply_port, shutdown, sync)
     # Blocking server handles one OSC message at a time
     server = BlockingOSCUDPServer((args.ip, args.port), dispatcher)

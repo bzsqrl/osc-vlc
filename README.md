@@ -10,8 +10,8 @@ rotary encoder.
 - **Ready-made TouchOSC layout:** controls up to 8 Pis, one page each, plus a
   page that controls them all at once.
 - **Hardware controls:** GPIO buttons and a rotary encoder for seeking.
-- **Sync:** one button lines up every playing Pi on the network to the same
-  playback position.
+- **Sync:** one button lines up every Pi on the network on the same playback
+  position.
 - **USB drives:** plug in a drive with videos and it plays those instead,
   until it's pulled out again.
 - **Unattended use:** starts fullscreen at boot and restarts itself after a crash.
@@ -356,8 +356,8 @@ Each page has:
   playlist, the default) → ONE (repeat the current video) → OFF (stop after
   the last video). On a player page it shows that player's mode.
 - **Speed buttons:** 0.5x, 1x (normal) and 2x.
-- **SYNC:** every player that's playing jumps to the same playback position
-  (see *Syncing players* below).
+- **SYNC:** every player jumps to the same playback position, then plays or
+  pauses together (see *Syncing players* below).
 - **QUIT PLAYER / QUIT ALL:** quits the player(s). Tap once and the button
   says *TAP AGAIN TO QUIT*. Tap again within 3 seconds to quit. Start the
   player again from the Pi's menu (section 1) or by rebooting.
@@ -376,27 +376,38 @@ Press it again to bring them back in step. Likewise, the ALL page's Loop button
 shows the last mode it set, which a player page may since have changed.
 
 ### Syncing players
-Press **SYNC** to line up the players' playback positions:
-- **On a player page,** that player is the master. Every other player on the
-  network that's playing jumps to the master's current time in its own video.
-- **On the ALL page,** the master is the first player (1, 2, 3 ...) whose
-  status says it's playing. The page names it for a few seconds where it
-  normally says *Everything on this page goes to all 8 players*.
-- **Players that ignore it:** players that are paused or stopped, and players
-  whose current video is shorter than the master's time. Those carry on as
-  they were.
+Press **SYNC** to line up the players:
+- **On a player page,** that player is the master.
+- **On the ALL page,** the master is the first player (1, 2, 3 ...) that's
+  playing, or if none is, the first one that's paused. The page names it for
+  a few seconds where it normally says *Everything on this page goes to all 8
+  players*.
+- **Every other player** on the network that's playing or paused jumps to the
+  master's current time in its own video, and then plays or stays paused like
+  the master. So you can, for example, pause them all, press SYNC to put them
+  on the same frame, then press PLAY on the ALL page.
+- **Players that ignore it:** stopped players, and players whose current video
+  is shorter than the master's time. Those carry on as they were.
 - **It happens once per press.** The players then run on their own and can
   slowly drift apart again. Press SYNC again to line them back up.
 
-It works with any mix of videos, formats and lengths. The master sends its
-time straight to the other players, so it reaches every player on the local
-network, not just those set up in TouchOSC. The master jumps to that same time
-at the same moment, so every player goes through the same short seek and they
-end up closely in step. How closely depends on the network and the videos:
-- **Wired Ethernet** gives the best result. Over Wi-Fi the message can arrive
-  a little later at some players.
-- **Same video files** on every player line up best. Different formats take
-  slightly different times to jump.
+How it works: jumping to a new position takes each player a different time
+(VLC has to decode from the last keyframe), which would leave them out of
+step. So SYNC works in two steps: every player, the master included, pauses
+and jumps to the master's time, and **1.5 seconds later**, once all of them
+have finished, they all start playing again at the same moment. The picture
+holds still during that pause.
+
+It works with any mix of videos, formats and lengths, and reaches every player
+on the local network, not just those set up in TouchOSC. For the closest
+result:
+- **Use wired Ethernet.** Over Wi-Fi the start signal can reach some players a
+  little later than others.
+- **If one player still starts late,** its jump is taking longer than the
+  pause (e.g. 4K video with keyframes far apart). Make the pause longer by
+  adding e.g. `--sync-hold 2.5` to the end of the `ExecStart=` line on the
+  players (the master's setting is the one used). A shorter pause, such as
+  `--sync-hold 1`, is fine for videos that jump quickly.
 
 The master sends to port 9000 at every address on the network (a broadcast).
 If your players listen on another port, or the network blocks broadcasts,
@@ -435,7 +446,7 @@ press and ignores the release, so each tap acts once.
 | `/ab/b` | A-B loop: set B (loop end) at the current time and start looping |
 | `/ab/clear` | A-B loop: clear |
 | `/ab` | A-B loop in one button: 1st press sets A, 2nd sets B, 3rd clears |
-| `/sync` | Every playing player on the network jumps to this player's position (see *Syncing players*) |
+| `/sync` | Every player on the network jumps to this player's position, then plays or pauses like it (see *Syncing players*) |
 
 An A-B loop plays the section between A and B over and over. It clears itself
 when the player stops or moves to another video. To set exact times from

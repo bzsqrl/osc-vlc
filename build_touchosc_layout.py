@@ -144,19 +144,22 @@ local function showInfo(text)
   infoUntil = getMillis() + 4000
 end
 
--- SYNC on the ALL page: the first player that's playing is the master, and
--- every other playing player jumps to its position
+-- SYNC on the ALL page: the master is the first player that's playing, or
+-- if none is, the first one that's paused. Every other player then jumps to
+-- its position, and plays or pauses like it.
 function onReceiveNotify(key)
   if key ~= 'sync' then return end
   local now = getMillis()
-  for n = 1, DEVICES do
-    if seen[n] >= 0 and now - seen[n] <= OFFLINE_MS and status[n].state == 'playing' then
-      sendOSC('/sync', conns[n])
-      showInfo('SYNC: all players to\nplayer ' .. n .. "'s position")
-      return
+  for _, state in ipairs({ 'playing', 'paused' }) do
+    for n = 1, DEVICES do
+      if seen[n] >= 0 and now - seen[n] <= OFFLINE_MS and status[n].state == state then
+        sendOSC('/sync', conns[n])
+        showInfo('SYNC: all players to\nplayer ' .. n .. "'s position")
+        return
+      end
     end
   end
-  showInfo('SYNC: no player\nis playing')
+  showInfo('SYNC: no player is\nplaying or paused')
 end
 
 function update()
