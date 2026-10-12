@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Generate osc_vlc_player.tosc, a TouchOSC layout for osc_vlc_player.py that
-controls up to 8 players (one per Raspberry Pi).
+controls up to 10 players (one per Raspberry Pi).
 
     python3 build_touchosc_layout.py            # writes osc_vlc_player.tosc
 
 Pages (tabs along the top):
     ALL      every button goes to all players; shows a one-line status per player
-    1 .. 8   one player each, with the full status display
+    1 .. 10  one player each, with the full status display
 
 Player n is TouchOSC connection n (OSC, UDP): host = that Pi's IP address,
 send port 9000, receive port 9000 + n (9001 for player 1, 9002 for player 2 ...).
@@ -22,7 +22,7 @@ import uuid
 import zlib
 from pathlib import Path
 
-DEVICES = 8               # TouchOSC has 10 connections; pages for 1..DEVICES
+DEVICES = 10              # one per TouchOSC connection (it has 10); pages 1..DEVICES
 BASE_PORT = 9000          # player n replies on BASE_PORT + n
 W, H = 1024, 768          # size of one page (landscape tablet); TouchOSC scales to fit
 TAB = 50                  # height of the page tab bar above the pages
@@ -421,7 +421,7 @@ def row(y, h, x0=MARGIN, x1=W - MARGIN, n=1):
 # --- LAYOUT -------------------------------------------------------------------
 
 # (y, height) of each row of controls. A device page has a status panel at the
-# top; the ALL page squeezes the rows a little to fit 8 status lines instead.
+# top; the ALL page squeezes the rows a little to fit the status lines instead.
 DEVICE_ROWS = dict(scrub=(134, 60), transport=(206, 120), skip=(336, 80),
                    loop=(426, 80), ab=(516, 70), picture=(596, 70), volume=(676, 76))
 ALL_ROWS = dict(scrub=(196, 56), transport=(262, 100), skip=(372, 70),
@@ -548,15 +548,16 @@ def device_page(n):
 
 def all_page():
     p = "all_"
-    # one status line per player: 1-4 in the left column, 5-8 in the right
+    # one status line per player: the first half in the left column, the rest
+    # in the right (1-5 and 6-10)
     c = []
     per_col = (DEVICES + 1) // 2
     cols = row(16, 0, n=2)
     for n in range(1, DEVICES + 1):
         x, _, w, _ = cols[(n - 1) // per_col]
-        y = 16 + ((n - 1) % per_col) * 44
-        c.append(label(f"all_dev{n}", (x, y, w, 38), f"{n}    not connected",
-                       size=15, color=DIM_TEXT, background=True))
+        y = 16 + ((n - 1) % per_col) * 34
+        c.append(label(f"all_dev{n}", (x, y, w, 30), f"{n}    not connected",
+                       size=14, color=DIM_TEXT, background=True))
     c += controls(p, list(range(1, DEVICES + 1)), ALL_ROWS,
                   lambda frame: label(p + "info", frame, "Everything on this page\n"
                                       f"goes to all {DEVICES} players",

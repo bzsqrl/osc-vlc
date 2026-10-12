@@ -7,7 +7,7 @@ rotary encoder.
 
 - **Playback control:** play/pause, previous/next, seek, skip, scrub, speed,
   volume, loop modes and A-B loops.
-- **Ready-made TouchOSC layout:** controls up to 8 Pis, one page each, plus a
+- **Ready-made TouchOSC layout:** controls up to 10 Pis, one page each, plus a
   page that controls them all at once.
 - **Hardware controls:** GPIO buttons and a rotary encoder for seeking.
 - **Sync:** one button lines up every Pi on the network on the same playback
@@ -319,7 +319,8 @@ away, if it had none). USB drives are picked up when they're plugged in.
 1. Put the Pis and the phone/tablet/computer running TouchOSC on the same network.
 2. Find each Pi's IP address: `hostname -I` on the Pi.
 3. In TouchOSC, open **Connections → OSC**. Each Pi gets its own connection:
-   player 1 is Connection 1, player 2 is Connection 2, and so on, up to 8.
+   player 1 is Connection 1, player 2 is Connection 2, and so on, up to 10
+   (all of TouchOSC's connections).
    Set each one to **UDP**, Host: *that Pi's IP*, Send Port: **9000**, and
    Receive Port: **9000 + its number**:
 
@@ -328,7 +329,7 @@ away, if it had none). USB drives are picked up when they're plugged in.
    | 1 | first Pi | 9000 | **9001** |
    | 2 | second Pi | 9000 | **9002** |
    | … | … | 9000 | … |
-   | 8 | eighth Pi | 9000 | **9008** |
+   | 10 | tenth Pi | 9000 | **9010** |
 
    The Pis themselves all use the same install, with no per-Pi settings. With
    only one Pi, just set up Connection 1.
@@ -338,10 +339,10 @@ away, if it had none). USB drives are picked up when they're plugged in.
 ### Ready-made layout
 Open `osc_vlc_player.tosc` in TouchOSC (File → Open), set up the connections
 as above, and press Play. It has a tab for each page along the top:
-- **ALL:** every button and fader goes to all 8 players at once. Instead of
+- **ALL:** every button and fader goes to all 10 players at once. Instead of
   the full status panel it shows one line per player: play state, time and
   video, or `not connected` / `NO REPLY`.
-- **1 to 8:** one page per player, each with the full set of controls below,
+- **1 to 10:** one page per player, each with the full set of controls below,
   going to that player only. If a page says `NO REPLY`, check that
   connection's host and receive port.
 
@@ -380,7 +381,7 @@ Press **SYNC** to line up the players:
 - **On a player page,** that player is the master.
 - **On the ALL page,** the master is the first player (1, 2, 3 ...) that's
   playing, or if none is, the first one that's paused. The page names it for
-  a few seconds where it normally says *Everything on this page goes to all 8
+  a few seconds where it normally says *Everything on this page goes to all 10
   players*.
 - **Every other player** on the network that's playing or paused jumps to the
   master's current time in its own video, and then plays or stays paused like
