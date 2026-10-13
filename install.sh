@@ -408,6 +408,8 @@ if [ ${#videos[@]} -eq 0 ]; then
 fi
 if $REBOOT; then
     :  # started after the reboot
+elif [ -n "${OSC_SKIP_START:-}" ]; then
+    :  # update_pis.sh restarts it itself
 elif [ "$MODE" = lite ]; then
     start_player; STARTED=true
 elif [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then

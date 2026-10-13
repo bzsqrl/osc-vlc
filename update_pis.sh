@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Update the video player on several Raspberry Pis at once: on each Pi, runs
-# "git pull" in the player folder, then "bash install.sh", then reboots it.
-# Run it from WSL (Ubuntu), or any Linux or macOS computer:
+# "git pull" in the player folder, then "bash install.sh", then restarts the
+# player. Run it from WSL (Ubuntu), or any Linux or macOS computer:
 #
 #     bash update_pis.sh                 # every Pi in update_pis.conf
 #     bash update_pis.sh 192.168.1.52    # just these Pis
-#     bash update_pis.sh --no-reboot     # update, but don't reboot
+#     bash update_pis.sh --reboot        # reboot the Pis instead
 #
 # The Pis and their username are set in update_pis.conf (created from
 # update_pis.conf.example on the first run). It asks for the Pis' password
@@ -30,9 +30,9 @@ REPO_DIR="osc-vlc"
 # shellcheck source=/dev/null
 source <(sed 's/\r$//' "$CONF")  # in case it was saved with Windows line endings
 
-REBOOT=1
-if [ "${1:-}" = --no-reboot ]; then
-    REBOOT=0; shift
+REBOOT=0
+if [ "${1:-}" = --reboot ]; then
+    REBOOT=1; shift
 fi
 [ $# -gt 0 ] && PIS=("$@")
 if [ -z "$PI_USER" ] || [[ "$PI_USER" == CHANGE_ME* ]]; then
@@ -69,15 +69,28 @@ sudo() { command sudo -A "$@"; }
 export -f sudo
 sudo -v < /dev/null 2> /dev/null || { echo "ERROR: sudo didn't accept the password"; exit 72; }
 echo "== bash install.sh"
-bash install.sh < /dev/null
-status=$?
-if [ "$status" -eq 0 ] && [ "$OSC_REBOOT" = 1 ]; then
+# the player is (re)started below, once, rather than also by install.sh
+OSC_SKIP_START=1 bash install.sh < /dev/null || exit
+if [ "$OSC_REBOOT" = 1 ]; then
     echo "== rebooting"
     # in a few seconds, so this connection can finish cleanly first
     sudo systemd-run --on-active=3 systemctl reboot > /dev/null 2>&1 < /dev/null ||
         { echo "ERROR: couldn't reboot it"; exit 73; }
+    exit 0
 fi
-exit "$status"
+# Lite mode: the player runs at boot. Desktop mode: it runs in the desktop
+# session, which has handed its display to systemd when it logged in.
+service=osc-vlc-player
+if ! systemctl --user is-enabled --quiet "$service" 2> /dev/null &&
+   ! systemctl --user show-environment 2> /dev/null | grep -qE '^(WAYLAND_)?DISPLAY='; then
+    echo "NOTE: the desktop isn't logged in; the player starts when it is"
+    exit 75
+fi
+echo "== restarting the player"
+systemctl --user restart "$service" < /dev/null
+sleep 3
+systemctl --user is-active --quiet "$service" ||
+    { echo "ERROR: the player didn't start: journalctl --user -u $service -n 30"; exit 74; }
 EOF
 
 LOGS="$(mktemp -d)"
@@ -106,10 +119,11 @@ for pi in "${PIS[@]}"; do
     case "$status" in
         0)   if [ "$REBOOT" = 1 ]; then
                  result="updated, rebooting (playing again in about a minute)"
-             elif grep -q "Reboot to finish\|take effect at the next reboot" "$LOGS/$pi.log"; then
-                 result="updated; reboot it to finish: ssh -t $PI_USER@$pi sudo reboot"
              else
-                 result="updated"
+                 result="updated, player restarted"
+                 if grep -q "Reboot to finish\|take effect at the next reboot" "$LOGS/$pi.log"; then
+                     result="$result; some settings apply after a reboot: ssh -t $PI_USER@$pi sudo reboot"
+                 fi
              fi ;;
         5)   result="FAILED: wrong password" ;;
         255) result="FAILED: couldn't connect (switched off, or wrong address?)"
@@ -120,6 +134,8 @@ for pi in "${PIS[@]}"; do
         71)  result="FAILED: git pull failed (see its output above)" ;;
         72)  result="FAILED: sudo didn't accept the password" ;;
         73)  result="updated, but couldn't reboot it: ssh -t $PI_USER@$pi sudo reboot" ;;
+        74)  result="updated, but the player didn't start again (see its output above)" ;;
+        75)  result="updated; the player starts when the desktop logs in (or reboot it)" ;;
         *)   result="FAILED: install.sh stopped with an error (exit $status; see its output above)" ;;
     esac
     [ "$status" = 0 ] || failed=$((failed + 1))
