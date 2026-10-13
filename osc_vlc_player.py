@@ -20,7 +20,8 @@ player plays those instead (looking at drives mounted under /media). Plugging
 it in or pulling it out switches over straight away. --no-usb turns this off.
 
 OSC address map (all arguments optional unless noted):
-    /play                    resume / start playback
+    /play                    resume / start playback (from stopped, it first
+                             re-reads the videos, picking up added / removed ones)
     /pause                   pause
     /toggle                  toggle play/pause
     /stop                    stop playback
@@ -235,6 +236,7 @@ class PlaylistSource:
         self.use_usb = use_usb
         self.drives = []    # drives mounted at the last scan
         self.drive = None   # the drive the playlist comes from, or None
+        self.lock = threading.Lock()  # scanned from the USB watcher and on Play
 
     def changed(self):
         """True if a drive has been plugged in or pulled out since the last scan."""
@@ -242,14 +244,15 @@ class PlaylistSource:
 
     def scan(self):
         """Return the playlist to use now, and remember which drive it's from."""
-        self.drives = usb_drives() if self.use_usb else []
-        for drive in self.drives:
-            files = collect_media([drive])
-            if files:
-                self.drive = drive
-                return files
-        self.drive = None
-        return collect_media(self.paths)
+        with self.lock:
+            self.drives = usb_drives() if self.use_usb else []
+            for drive in self.drives:
+                files = collect_media([drive])
+                if files:
+                    self.drive = drive
+                    return files
+            self.drive = None
+            return collect_media(self.paths)
 
     def describe(self):
         if self.drive:
@@ -524,6 +527,7 @@ class VideoController:
         self._no_picture_for = 0.0  # seconds played without a picture
         self._picture_checked_at = time.monotonic()
         self._picture_warned = False
+        self.rescan = None  # returns the playlist as it is now; see _refresh()
         self._set_playlist(files)
         self._closing = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch, daemon=True)
@@ -545,6 +549,19 @@ class VideoController:
                 media.parse_with_options(vlc.MediaParseFlag.local, PROBE_TIMEOUT_MS)
         for media in old:
             media.release()
+
+    def _refresh(self):
+        """Starting from stopped: pick up videos added to or removed from the
+        folder (or USB drive) since the playlist was read."""
+        if not self.rescan:
+            return
+        files = self.rescan()
+        if files == self.files:
+            return
+        current = self.files[self.index] if 0 <= self.index < len(self.files) else None
+        self._set_playlist(files)
+        if current in files:
+            self.index = files.index(current)  # carry on with the same video
 
     @locked
     def load(self, files, autoplay):
@@ -653,6 +670,8 @@ class VideoController:
 
     @locked
     def play(self):
+        if self._is_idle():
+            self._refresh()
         if not self.medias:
             print("no videos to play")
         elif not self._is_idle():
@@ -1607,6 +1626,15 @@ def main():
     vlc_args += args.vlc_args.split()
     ctrl = VideoController(files, vlc_args, not args.windowed, args.loop, aspect,
                            args.clean_switch)
+
+    def rescan():
+        files = source.scan()
+        if files != ctrl.files:
+            print("the videos have changed since the playlist was read")
+            print_playlist(files, source)
+        return files
+
+    ctrl.rescan = rescan  # Play from stopped re-reads the videos
     if ctrl.board:
         limits = ", ".join(f"{codec_name(codec)} up to {w}x{h}@{fps}"
                            for codec, (w, h, fps) in DECODE_LIMITS[ctrl.board].items())

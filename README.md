@@ -251,8 +251,14 @@ systemctl --user start osc-vlc-player        # start again
 journalctl --user -u osc-vlc-player -f       # live log of every command received
 hostname -I                                  # the Pi's IP address, for TouchOSC
 ```
-New videos in `~/Videos` are picked up when the player restarts (or straight
-away, if it had none). USB drives are picked up when they're plugged in.
+**Changing the videos without restarting the player:** press **STOP** in
+TouchOSC, add or remove videos in `~/Videos` (or on the USB drive), then press
+**PLAY**. Playing from stopped re-reads the videos first, and the log lists
+the new playlist. It carries on with the video it was on if that's still
+there, and otherwise starts from the first. (PLAY while playing or paused
+doesn't re-read, so it never interrupts a video.) A player with no videos at
+all picks them up as soon as they appear, and USB drives are picked up when
+they're plugged in.
 
 ### Troubleshooting
 - **Which mode is it running in?** The log's first lines say
@@ -361,7 +367,8 @@ Each page has:
   loop mode, aspect ratio, and a progress bar. Updates twice a second.
 - **Scrub fader:** drag to any point in the video.
 - **Transport buttons:** previous, restart video (back to its start),
-  play/pause, stop and next.
+  play/pause, stop and next. PLAY / PAUSE after STOP re-reads the videos
+  folder, picking up videos added or removed meanwhile.
 - **Skip buttons:** jump back or forward by 5, 20 or 60 seconds.
 - **Loop button:** each tap moves to the next playlist mode: ALL (loop the
   playlist, the default) → ONE (repeat the current video) → OFF (stop after
@@ -534,7 +541,7 @@ press and ignores the release, so each tap acts once.
 | Address | Action |
 |---|---|
 | `/toggle` | Play / pause |
-| `/play` | Play |
+| `/play` | Play. From stopped, re-reads the videos first (picking up added / removed ones) |
 | `/pause` | Pause |
 | `/stop` | Stop |
 | `/next` | Next video |
