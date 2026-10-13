@@ -35,6 +35,7 @@ Built on VLC ([python-vlc](https://pypi.org/project/python-vlc/)) and
 | `osc_vlc_player.tosc` | TouchOSC layout for tablets (section 2) |
 | `osc_vlc_player_phone.tosc` | TouchOSC layout for phones, portrait (section 2) |
 | `build_touchosc_layout.py`, `build_touchosc_phone.py` | Generate the two TouchOSC layouts |
+| `update_pis.sh`, `update_pis.conf.example` | Update several Pis at once, from your computer (section 1) |
 
 Released under the [MIT License](LICENSE).
 
@@ -241,6 +242,39 @@ sudo install -m 755 osc-vlc-usb-mount /usr/local/sbin/
 sudo install -m 644 99-osc-vlc-usb.rules /etc/udev/rules.d/
 ```
 Then reboot.
+
+### Updating several Pis at once
+`update_pis.sh` updates every Pi from your computer in one go: on each one it
+runs `git pull` in the player folder and then `bash install.sh`, all Pis at the
+same time. It runs in WSL (Ubuntu on Windows), Linux or macOS, and needs
+`sshpass`:
+```bash
+sudo apt install sshpass
+```
+1. Run it once from the project folder (in WSL, the Windows folder is under
+   `/mnt/c/...`):
+   ```bash
+   bash update_pis.sh
+   ```
+   It creates `update_pis.conf` and stops.
+2. Open `update_pis.conf` and fill in the Pis' username and their IP addresses
+   (as many as you have). It stays on your computer: git ignores it, so your
+   addresses never go to GitHub and `git pull` never touches it.
+3. Run `bash update_pis.sh` again. It asks for the Pis' password once (the
+   same on all of them), updates them all, and ends with a summary:
+   ```
+   ===== Summary =====
+     192.168.1.51       updated
+     192.168.1.52       updated; reboot it to finish: ssh -t pi@192.168.1.52 sudo reboot
+     192.168.1.53       FAILED: couldn't connect (switched off, or wrong address?)
+   ```
+
+To update only some of them, name them: `bash update_pis.sh 192.168.1.52`.
+The password isn't stored anywhere, nor shown on any command line; on the
+Pis it's only used to answer `sudo` while the installer runs. Each Pi's full
+output is saved, and the summary says where. The first time it connects to a
+Pi it trusts that Pi's SSH key; if a Pi has been reinstalled since, it refuses
+it, and the summary tells you the command to accept the new key.
 
 ### Useful commands
 ```bash

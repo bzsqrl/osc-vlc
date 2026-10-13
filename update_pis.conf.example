@@ -1,0 +1,16 @@
+# Settings for update_pis.sh. On its first run, update_pis.sh copies this to
+# update_pis.conf; fill that in (it stays on your computer: git ignores it).
+
+# The username on the Pis (the same on all of them)
+PI_USER="CHANGE_ME"
+
+# One IP address (or hostname) per Pi, as many as you have
+PIS=(
+    "CHANGE_ME_1"     # e.g. 192.168.1.51
+    "CHANGE_ME_2"
+    "CHANGE_ME_3"
+    "CHANGE_ME_4"
+)
+
+# The player's folder on the Pis, inside the home folder
+REPO_DIR="osc-vlc"
