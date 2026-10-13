@@ -245,8 +245,9 @@ Then reboot.
 
 ### Updating several Pis at once
 `update_pis.sh` updates every Pi from your computer in one go: on each one it
-runs `git pull` in the player folder and then `bash install.sh`, all Pis at the
-same time. It runs in WSL (Ubuntu on Windows), Linux or macOS, and needs
+runs `git pull` in the player folder, then `bash install.sh`, then reboots it
+(all Pis at the same time). The players start again by themselves after the
+reboot. It runs in WSL (Ubuntu on Windows), Linux or macOS, and needs
 `sshpass`:
 ```bash
 sudo apt install sshpass
@@ -264,12 +265,15 @@ sudo apt install sshpass
    same on all of them), updates them all, and ends with a summary:
    ```
    ===== Summary =====
-     192.168.1.51       updated
-     192.168.1.52       updated; reboot it to finish: ssh -t pi@192.168.1.52 sudo reboot
+     192.168.1.51       updated, rebooting (playing again in about a minute)
+     192.168.1.52       updated, rebooting (playing again in about a minute)
      192.168.1.53       FAILED: couldn't connect (switched off, or wrong address?)
    ```
 
-To update only some of them, name them: `bash update_pis.sh 192.168.1.52`.
+A Pi is only rebooted if its update succeeded. To update only some of them,
+name them: `bash update_pis.sh 192.168.1.52`. To update without rebooting,
+add `--no-reboot` (e.g. `bash update_pis.sh --no-reboot`); the summary then
+says which Pis need a reboot to finish.
 The password isn't stored anywhere, nor shown on any command line; on the
 Pis it's only used to answer `sudo` while the installer runs. Each Pi's full
 output is saved, and the summary says where. The first time it connects to a
