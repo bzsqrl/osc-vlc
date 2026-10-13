@@ -134,8 +134,12 @@ SYNC_HOLD_SECONDS = 1.5
 # message), and every other player nudges its speed to stay in step with it.
 LOCK_BEAT_SECONDS = 1.0
 LOCK_TIMEOUT = 5.0        # no word from the master this long: back to normal speed
-LOCK_RANGE = 1.0          # further apart than this (s): leave it to SYNC
+LOCK_RANGE = 3.0          # further apart than this (s): leave it to SYNC
 LOCK_SAMPLES = 8          # judge the offset from this many recent messages
+LOCK_LOG_SECONDS = 60     # a follower logs its offset this often
+LOCK_PAUSE_RESET = 3.0    # can't compare for this long (paused...): normal speed
+END_MARGIN_MS = 400       # positions this close to a video's end aren't compared
+RESTART_WARN_MS = 300     # log loop restarts that hold the picture longer than this
 LOCK_MIN_CHANGE = 3.0     # change speed at most this often (s)
 LOCK_SETTLED = 0.02       # within this (s): normal speed
 LOCK_DEADBAND = 0.05      # start correcting beyond this (s)
@@ -148,7 +152,7 @@ def lock_error(own, master):
     or None if they can't be compared. Each is (ms, playlist index, video
     length ms). Also compares across the start of a video, for a video that
     repeats or a playlist where one player has already moved on."""
-    ms, index, length, count = own
+    ms, index, length, count = own[:4]
     m_ms, m_index, m_length = master
     if index == m_index:
         error = ms - m_ms
@@ -487,7 +491,9 @@ class VideoController:
         # VLC reports the playback time a few times a second; the moment of each
         # report gives the exact position at any time in between (see position_now)
         self._tick = None             # (monotonic time, playback ms) of the last report
+        self._length = -1             # current video's length (ms), for _on_time
         self._jumped_at = 0.0         # last seek / change of video: reports unsettled
+        self.jumps = 0                # how many there have been (for SYNC LOCK)
         self._wrapped = threading.Event()  # a repeating video started over
         self.player.event_manager().event_attach(
             vlc.EventType.MediaPlayerTimeChanged, self._on_time)
@@ -576,6 +582,7 @@ class VideoController:
         self.index = index
         self._output_open = True
         self._jumped_at = time.monotonic()
+        self.jumps += 1
         self._wrapped.clear()
         # A video that plays over and over (loop "one", or a playlist of one)
         # repeats inside VLC: much quicker than opening the file again, so the
@@ -604,6 +611,18 @@ class VideoController:
         last, self._tick = self._tick, (now, ms)
         if last and ms < last[1] - 1000 and now - self._jumped_at > 1.0:
             self._wrapped.set()  # the time went back by itself: it started over
+            # The restart holds the picture for a moment; positions around it
+            # aren't reliable (see position_now)
+            self._jumped_at = now
+            self.jumps += 1
+            length = self._length
+            if length > 0:
+                # where it would be now had it carried straight on, vs where it is
+                lost = last[1] + (now - last[0]) * 1000 * self.user_rate * self.correction \
+                    - length - ms
+                if lost > RESTART_WARN_MS:
+                    print(f"loop restart took {lost / 1000:.2f}s (the picture held "
+                          "that long at the start of the video)")
 
     def _step(self, delta, wrap):
         """Index `delta` videos from the current one, or None at the end of the list."""
@@ -691,6 +710,7 @@ class VideoController:
     @locked
     def _check_end(self):
         """When a video has played to the end, move on as the loop mode says."""
+        self._length = self.player.get_length()  # for _on_time
         if self._wrapped.is_set():
             self._wrapped.clear()
             # A video repeating inside VLC just started over. If the loop mode
@@ -724,6 +744,7 @@ class VideoController:
         self.player.set_time(ms)
         self._seek_target = ms
         self._seek_at = self._jumped_at = time.monotonic()
+        self.jumps += 1
 
     @locked
     def skip(self, seconds):
@@ -734,6 +755,7 @@ class VideoController:
     def position(self, pos):
         self._clear_seek()
         self._jumped_at = time.monotonic()
+        self.jumps += 1
         self.player.set_position(min(max(float(pos), 0.0), 1.0))
 
     # --- sync ------------------------------------------------------------------
@@ -774,8 +796,8 @@ class VideoController:
 
     @locked
     def position_now(self):
-        """(playback ms, playlist index, video length ms, playlist size) right
-        now, to about a millisecond, or None unless playing steadily. Projects
+        """(playback ms, playlist index, video length ms, playlist size, jump
+        count) right now, to about a millisecond, or None unless playing steadily. Projects
         forward from VLC's last time report (they come every ~0.3 s, each one
         exact), as get_time() itself only moves in steps."""
         now, tick = time.monotonic(), self._tick
@@ -783,7 +805,13 @@ class VideoController:
                 or now - self._jumped_at < 1.0 or now - tick[0] > 1.0):
             return None
         ms = tick[1] + (now - tick[0]) * 1000 * self.user_rate * self.correction
-        return ms, self.index, self.player.get_length(), len(self.medias)
+        length = self.player.get_length()
+        # Near the end the video is about to start over (or the next one to
+        # start), which holds the picture for a moment while the estimate
+        # would carry on counting
+        if length > 0 and ms > length - END_MARGIN_MS:
+            return None
+        return ms, self.index, length, len(self.medias), self.jumps
 
     @locked
     def set_correction(self, correction):
@@ -1118,7 +1146,10 @@ class Sync:
         self.shift = (0.0, time.monotonic(), 0.0)  # see own_shift()
         self.changed_at = 0.0     # last change of speed
         self.offset = None        # best estimate of that, for the status display
-        self.far = False
+        self.far = False          # too far from the master to catch up by speed
+        self.valid_at = 0.0       # last time the positions could be compared
+        self.jump_counts = None   # (master's, own) jumps when the samples began
+        self.logged_at = 0.0
         self.closing = threading.Event()
         self.beat_thread = threading.Thread(target=self._beat_loop, daemon=True)
         self.beat_thread.start()
@@ -1238,10 +1269,10 @@ class Sync:
     def _beat(self):
         position = self.ctrl.position_now()
         if position is None:  # paused, or just jumped: nothing to compare with
-            self._send("/sync/beat", -1, -1, -1, self.id, repeat=1)
+            self._send("/sync/beat", -1, -1, -1, -1, self.id, repeat=1)
         else:
-            ms, index, length, _ = position
-            self._send("/sync/beat", int(ms), index, int(length), self.id, repeat=1)
+            ms, index, length, _, jumps = position
+            self._send("/sync/beat", int(ms), index, int(length), jumps, self.id, repeat=1)
 
     def _follow_stop(self):
         """Stop following (call with lock_state held)."""
@@ -1277,9 +1308,10 @@ class Sync:
 
     def follow_beat(self, addr, *args):
         try:
-            ms, index, length, sender = int(args[0]), int(args[1]), int(args[2]), str(args[3])
+            ms, index, length, jumps, sender = (int(args[0]), int(args[1]), int(args[2]),
+                                                int(args[3]), str(args[4]))
         except (IndexError, TypeError, ValueError):
-            print(f"{addr}: expected time, index, length and sender, got {args}")
+            print(f"{addr}: expected time, index, length, jumps and sender, got {args}")
             return
         if sender == self.id:
             return
@@ -1295,24 +1327,45 @@ class Sync:
             self.master_seen = now
             own = self.ctrl.position_now()
             if ms < 0 or own is None:
-                self._reset()  # one of them is paused, or has just jumped
+                # One of them is restarting its video or has just jumped (skip
+                # this one, carry on as before), or is paused or stopped (back
+                # to normal speed, if it lasts)
+                if now - self.valid_at > LOCK_PAUSE_RESET:
+                    self._reset()
                 return
             error = lock_error(own, (ms, index, length))
             if error is None or abs(error) > LOCK_RANGE * 1000:
                 if not self.far:
-                    print("lock: too far from the master to catch up by speed; press SYNC")
+                    where = "a different video" if error is None else f"{error / 1000:+.2f}s"
+                    print(f"lock: too far from the master ({where}) to catch up by "
+                          "speed; press SYNC")
                 self._reset(far=True)
+                self.offset = None if error is None else error / 1000
                 return
+            if self.far:
+                print("lock: close enough to the master again, keeping in step")
             self.far = False
+            self.valid_at = now
             shift = self.own_shift(now)
+            # The offset only changes suddenly when one of them jumps or starts
+            # a video over (each pauses the picture for its own length of
+            # time); after that, the earlier offsets no longer apply
+            if (jumps, own[4]) != self.jump_counts:
+                self.jump_counts = (jumps, own[4])
+                self.samples.clear()
             self.samples = (self.samples + [(shift, error / 1000)])[-LOCK_SAMPLES:]
             if len(self.samples) < 3:
                 return
             # A message only ever arrives late (Wi-Fi can hold one back), which
             # makes this player look further ahead than it is, so trust the
-            # smallest of the recent offsets, each brought up to now
+            # smallest of the recent offsets, each brought up to now. (Moments
+            # around a jump or restart, which could look early, aren't sampled.)
             offset = min(e + shift - then for then, e in self.samples)
             self.offset = offset
+            if now - self.logged_at >= LOCK_LOG_SECONDS:
+                self.logged_at = now
+                print(f"lock: {offset:+.3f}s from the master, speed "
+                      f"{self.ctrl.correction * 100:g}%")
             if now - self.changed_at >= LOCK_MIN_CHANGE:
                 self._correct(offset)
 
@@ -1347,7 +1400,7 @@ class Sync:
             if not self.master:
                 return "off"
             if self.far:
-                return "far"
+                return "far" if self.offset is None else f"far{self.offset:+.2f}"
             return "waiting" if self.offset is None else f"{self.offset:+.3f}"
 
     def close(self):

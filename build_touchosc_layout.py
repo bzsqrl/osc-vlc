@@ -95,13 +95,18 @@ local function summary(n, now)
     fmt(s.time), fmt(s.length), file)
 end
 
--- SYNC LOCK state from /status/lock: off, master, waiting, far, or the
--- offset from the master in seconds
-local function lockText(v)
+-- SYNC LOCK state from /status/lock: off, master, waiting, far (or e.g.
+-- far+1.20: that far from the master), or the offset from the master in
+-- seconds. `long` adds the far offset, for the status line.
+local function lockText(v, long)
   v = tostring(v or 'off')
   local offset = tonumber(v)
   if offset then return string.format('%%+.2fs', offset) end
-  if v == 'far' then return 'TOO FAR' end
+  local far = string.match(v, '^far(.*)$')
+  if far then
+    if long and far ~= '' then return 'TOO FAR (' .. far .. 's): press SYNC' end
+    return 'TOO FAR'
+  end
   return string.upper(v)
 end
 
@@ -125,7 +130,7 @@ local function refresh(n, now)
   end
   setText(p .. 'lblTime', fmt(s.time) .. ' / ' .. fmt(s.length))
   setText(p .. 'lblState', up(s.state) .. '     loop: ' .. up(s.loop) ..
-    '     aspect: ' .. up(s.aspect) .. '     lock: ' .. lockText(s.lock))
+    '     aspect: ' .. up(s.aspect) .. '     lock: ' .. lockText(s.lock, true))
   setText(p .. 'lock_lbl', 'LOCK\n' .. lockText(s.lock))
   local volume = tonumber(s.volume) or -1
   setText(p .. 'lblVolume', 'volume: ' .. (volume >= 0 and tostring(volume) or '?'))

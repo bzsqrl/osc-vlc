@@ -468,12 +468,23 @@ The lock state shows on each player page's LOCK button and status line:
 | `MASTER` | The others keep in step with this player |
 | `+0.03s` | Following the master, 0.03 seconds ahead of it (`-` = behind) |
 | `WAITING` | Following, but this player or the master is paused, or has just jumped |
-| `TOO FAR` | More than a second from the master: too far to catch up by speed. Press SYNC |
+| `TOO FAR` | More than 3 seconds from the master (the status line shows how far): too far to catch up by speed. Press SYNC |
 | `OFF` | Not locked |
+
+Up to 3 seconds apart, a player catches up by speed alone (at 2%, a second
+takes under a minute), so even a player that falls well behind, or loses a
+moment when restarting its video, comes back in step by itself.
 
 Notes:
 - LOCK only adjusts speed; it never jumps. After a big change (another video
   on one player, or a skip), press SYNC to line them up again.
+- Each time a video starts over, the picture holds for a moment, a little
+  longer on some players than others. That shifts them slightly at every
+  loop, and LOCK then brings them back. If a player's log often says
+  `loop restart took 0.45s`, that player restarts slowly (e.g. a slow SD card
+  or USB drive), and with short videos it will spend more time catching up.
+- Followers log their offset once a minute (`lock: +0.012s from the master,
+  speed 100%`), so the log shows how well they stayed in step over a long run.
 - With 4K video at 50-60 fps on a Pi 4, which is at the limit of what it can
   decode, a player that's behind catches up at no more than 1% faster.
 - The players' logs show each adjustment, e.g. `lock: 0.119s ahead of the
