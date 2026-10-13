@@ -11,7 +11,7 @@ rotary encoder.
   page that controls them all at once.
 - **Hardware controls:** GPIO buttons and a rotary encoder for seeking.
 - **Sync:** one button lines up every Pi on the network on the same playback
-  position.
+  position, and LOCK keeps them in step with gentle speed adjustments.
 - **USB drives:** plug in a drive with videos and it plays those instead,
   until it's pulled out again.
 - **Unattended use:** starts fullscreen at boot and restarts itself after a crash.
@@ -131,6 +131,10 @@ At the end, the installer prints the settings for TouchOSC (section 2).
   clock, so the Pi runs a little warmer. Skip it with `--no-4k60`; if
   `config.txt` already has `hdmi_enable_4kp60=0`, the installer leaves that
   alone unless you use `--4k60`. The Pi 5 doesn't need it.
+- **Wi-Fi:** turns off Wi-Fi power saving
+  (`/etc/NetworkManager/conf.d/osc-vlc-wifi-powersave.conf`). With it on, the
+  Pi can hold incoming messages back for a few hundred milliseconds, making
+  TouchOSC sluggish and LOCK less exact.
 - **USB drives, Lite mode:** adds a udev rule (`/etc/udev/rules.d/99-osc-vlc-usb.rules`,
   with `/usr/local/sbin/osc-vlc-usb-mount`) that mounts USB drives when
   they're plugged in. On the desktop, the desktop does this itself.
@@ -361,10 +365,16 @@ Each page has:
 - **Skip buttons:** jump back or forward by 5, 20 or 60 seconds.
 - **Loop button:** each tap moves to the next playlist mode: ALL (loop the
   playlist, the default) → ONE (repeat the current video) → OFF (stop after
-  the last video). On a player page it shows that player's mode.
+  the last video). On a player page it shows that player's mode. A video
+  that repeats (ONE, or ALL with a single video) starts over inside VLC,
+  without reopening the file, so the restart is quicker and smoother.
 - **Speed buttons:** 0.5x, 1x (normal) and 2x.
 - **SYNC:** every player jumps to the same playback position, then plays or
   pauses together (see *Syncing players* below).
+- **LOCK:** keeps every player in step with one master, without jumps (see
+  *Keeping players in step* below). The button shows the player's lock
+  state: MASTER, its offset from the master (e.g. `+0.03s`), WAITING, TOO FAR
+  or OFF.
 - **QUIT PLAYER / QUIT ALL:** quits the player(s). Tap once and the button
   says *TAP AGAIN TO QUIT*. Tap again within 3 seconds to quit. Start the
   player again from the Pi's menu (section 1) or by rebooting.
@@ -396,7 +406,8 @@ Press **SYNC** to line up the players:
 - **Players that ignore it:** stopped players, and players whose current video
   is shorter than the master's time. Those carry on as they were.
 - **It happens once per press.** The players then run on their own and can
-  slowly drift apart again. Press SYNC again to line them back up.
+  slowly drift apart again. Press SYNC again to line them back up, or use
+  LOCK to keep them in step.
 
 How it works: jumping to a new position takes each player a different time
 (VLC has to decode from the last keyframe), which would leave them out of
@@ -408,8 +419,9 @@ holds still during that pause.
 It works with any mix of videos, formats and lengths, and reaches every player
 on the local network, not just those set up in TouchOSC. For the closest
 result:
-- **Use wired Ethernet.** Over Wi-Fi the start signal can reach some players a
-  little later than others.
+- **Wired Ethernet is best.** Over Wi-Fi the start signal can reach some
+  players a little later than others. The installer turns off Wi-Fi power
+  saving, which otherwise delays messages the most.
 - **If one player still starts late,** its jump is taking longer than the
   pause (e.g. 4K video with keyframes far apart). Make the pause longer by
   adding e.g. `--sync-hold 2.5` to the end of the `ExecStart=` line on the
@@ -424,6 +436,48 @@ once per player, with each player's IP address:
 ```
 --sync-address 192.168.1.51 --sync-address 192.168.1.52 --sync-address 192.168.1.53
 ```
+
+### Keeping players in step (LOCK)
+Players drift apart slowly once they're playing: each Pi's clock runs at a
+very slightly different speed, and each player loses a slightly different
+moment whenever it starts a video again. **LOCK** keeps them together without
+jumping:
+1. Press **SYNC** to line them up.
+2. Press **LOCK**. On a player page, that player becomes the master; on the
+   ALL page, the master is picked as for SYNC. Every other player on the
+   network keeps in step with it.
+3. Press **LOCK** again (on the master's page, or the ALL page) to stop.
+   Turning LOCK on for another player makes that one the master instead.
+
+While locked, the master sends its exact position once a second (one small
+message, so the network barely notices it). Each other player compares it
+with its own position, and if it has drifted more than 0.05 seconds, plays 1%
+faster or slower (2% if more than 0.15 s out) until it's back within about
+0.02 s, then returns to normal speed. The change is too small to see, and the
+sound keeps its pitch. Players keep within about 0.05 s of the master, also
+over Wi-Fi.
+
+It works for the same video on every player, different videos of the same
+length, and identical playlists of several videos (including across the
+change from one video to the next).
+
+The lock state shows on each player page's LOCK button and status line:
+
+| Shown | Meaning |
+|---|---|
+| `MASTER` | The others keep in step with this player |
+| `+0.03s` | Following the master, 0.03 seconds ahead of it (`-` = behind) |
+| `WAITING` | Following, but this player or the master is paused, or has just jumped |
+| `TOO FAR` | More than a second from the master: too far to catch up by speed. Press SYNC |
+| `OFF` | Not locked |
+
+Notes:
+- LOCK only adjusts speed; it never jumps. After a big change (another video
+  on one player, or a skip), press SYNC to line them up again.
+- With 4K video at 50-60 fps on a Pi 4, which is at the limit of what it can
+  decode, a player that's behind catches up at no more than 1% faster.
+- The players' logs show each adjustment, e.g. `lock: 0.119s ahead of the
+  master, playing at 99% speed`.
 
 ### Phone layout
 `osc_vlc_player_phone.tosc` puts the same controls in one column for a phone
@@ -479,6 +533,7 @@ press and ignores the release, so each tap acts once.
 | `/ab/clear` | A-B loop: clear |
 | `/ab` | A-B loop in one button: 1st press sets A, 2nd sets B, 3rd clears |
 | `/sync` | Every player on the network jumps to this player's position, then plays or pauses like it (see *Syncing players*) |
+| `/sync/lock` | Switch LOCK on / off with this player as the master (see *Keeping players in step*); with an integer argument, `1` = on, `0` = off |
 
 An A-B loop plays the section between A and B over and over. It clears itself
 when the player stops or moves to another video. To set exact times from

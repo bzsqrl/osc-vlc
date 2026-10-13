@@ -55,6 +55,8 @@ OLDER_PI='Pi (Model|Zero|2 |3 )|Compute Module (Rev|3)'
 # lite mode: mount USB drives (the desktop does this itself)
 USB_RULE=/etc/udev/rules.d/99-osc-vlc-usb.rules
 USB_MOUNT=/usr/local/sbin/osc-vlc-usb-mount
+# Wi-Fi power saving can hold incoming messages back for a few hundred ms
+WIFI_CONF=/etc/NetworkManager/conf.d/osc-vlc-wifi-powersave.conf
 # kernel options for lite mode: no console blanking, cursor or boot logo
 CMDLINE_OPTIONS=(consoleblank=0 vt.global_cursor_default=0 logo.nologo)
 
@@ -130,6 +132,9 @@ if $UNINSTALL; then
     [ "$SRC" = "$HOME" ] || rm -f "$HOME/osc_vlc_player.py"
     rm -rf "$(dirname "$MODE_FILE")"
     remove_usb_mounting || warn "couldn't remove $USB_RULE and $USB_MOUNT"
+    if [ -f "$WIFI_CONF" ]; then
+        sudo rm -f "$WIFI_CONF" || warn "couldn't remove $WIFI_CONF"
+    fi
     systemctl --user daemon-reload 2>/dev/null || true
     note "Done. Kept your videos in $VIDEOS_DIR, the Python environment in $VENV"
     note "(remove it with: rm -rf ~/venv) and the boot / screen blanking settings."
@@ -185,6 +190,23 @@ if $SYSTEM; then
             warn "couldn't install ${missing[*]}; the player may not work"
     else
         note "all present"
+    fi
+
+    # Wi-Fi power saving makes the Pi hold back incoming messages for up to a
+    # few hundred ms: TouchOSC feels sluggish and SYNC LOCK is less exact
+    if compgen -G "/sys/class/net/wl*" > /dev/null && [ -d /etc/NetworkManager/conf.d ]; then
+        step "Turning off Wi-Fi power saving (quicker response over Wi-Fi)"
+        if [ -f "$WIFI_CONF" ]; then
+            note "already off"
+        elif printf '[connection]\nwifi.powersave = 2\n' | sudo tee "$WIFI_CONF" > /dev/null; then
+            # takes effect at the next connection; switch it off now as well
+            for dev in /sys/class/net/wl*; do
+                sudo iw dev "${dev##*/}" set power_save off 2> /dev/null || true
+            done
+            note "set in $WIFI_CONF"
+        else
+            warn "couldn't change it; the player still works, a little less responsively"
+        fi
     fi
 
     # An early version of the player ran as a system-wide service

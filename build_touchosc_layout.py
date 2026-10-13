@@ -95,6 +95,20 @@ local function summary(n, now)
     fmt(s.time), fmt(s.length), file)
 end
 
+-- SYNC LOCK state from /status/lock: off, master, waiting, far, or the
+-- offset from the master in seconds
+local function lockText(v)
+  v = tostring(v or 'off')
+  local offset = tonumber(v)
+  if offset then return string.format('%%+.2fs', offset) end
+  if v == 'far' then return 'TOO FAR' end
+  return string.upper(v)
+end
+
+local function fresh(n, now)
+  return seen[n] >= 0 and now - seen[n] <= OFFLINE_MS
+end
+
 local function refresh(n, now)
   local s, p = status[n], 'd' .. n .. '_'
   setText('all_dev' .. n, summary(n, now))
@@ -111,7 +125,8 @@ local function refresh(n, now)
   end
   setText(p .. 'lblTime', fmt(s.time) .. ' / ' .. fmt(s.length))
   setText(p .. 'lblState', up(s.state) .. '     loop: ' .. up(s.loop) ..
-    '     aspect: ' .. up(s.aspect))
+    '     aspect: ' .. up(s.aspect) .. '     lock: ' .. lockText(s.lock))
+  setText(p .. 'lock_lbl', 'LOCK\n' .. lockText(s.lock))
   local volume = tonumber(s.volume) or -1
   setText(p .. 'lblVolume', 'volume: ' .. (volume >= 0 and tostring(volume) or '?'))
   -- show the player's loop mode on its LOOP button (only when it changes)
@@ -147,19 +162,50 @@ end
 -- SYNC on the ALL page: the master is the first player that's playing, or
 -- if none is, the first one that's paused. Every other player then jumps to
 -- its position, and plays or pauses like it.
-function onReceiveNotify(key)
-  if key ~= 'sync' then return end
-  local now = getMillis()
+local function pickMaster(now)
   for _, state in ipairs({ 'playing', 'paused' }) do
     for n = 1, DEVICES do
-      if seen[n] >= 0 and now - seen[n] <= OFFLINE_MS and status[n].state == state then
-        sendOSC('/sync', conns[n])
-        showInfo('SYNC: all players to\nplayer ' .. n .. "'s position")
-        return
-      end
+      if fresh(n, now) and status[n].state == state then return n end
     end
   end
-  showInfo('SYNC: no player is\nplaying or paused')
+end
+
+-- the player that's the SYNC LOCK master, if any
+local function lockMaster(now)
+  for n = 1, DEVICES do
+    if fresh(n, now) and status[n].lock == 'master' then return n end
+  end
+end
+
+-- LOCK on the ALL page: if a player is the lock's master, stop the lock;
+-- otherwise start it, with the same master SYNC would pick
+local function allLock(now)
+  local m = lockMaster(now)
+  if m then
+    sendOSC({ '/sync/lock', { { tag = 'i', value = 0 } } }, conns[m])
+    showInfo('LOCK: off')
+    return
+  end
+  local n = pickMaster(now)
+  if n then
+    sendOSC({ '/sync/lock', { { tag = 'i', value = 1 } } }, conns[n])
+    showInfo('LOCK: all players keep\nin step with player ' .. n)
+  else
+    showInfo('LOCK: no player is\nplaying or paused')
+  end
+end
+
+function onReceiveNotify(key)
+  local now = getMillis()
+  if key == 'lock' then return allLock(now) end
+  if key ~= 'sync' then return end
+  local n = pickMaster(now)
+  if n then
+    sendOSC('/sync', conns[n])
+    showInfo('SYNC: all players to\nplayer ' .. n .. "'s position")
+  else
+    showInfo('SYNC: no player is\nplaying or paused')
+  end
 end
 
 function update()
@@ -175,6 +221,8 @@ function update()
     -- a player that stops answering is shown as NO REPLY
     if seen[n] >= 0 and now - seen[n] > OFFLINE_MS then refresh(n, now) end
   end
+  local m = lockMaster(now)
+  setText('all_lock_lbl', m and ('LOCK ON\nmaster: ' .. m) or 'LOCK\nOFF')
 end
 
 function onReceiveOSC(message, connections)
@@ -382,24 +430,48 @@ def loop_button(name, frame, devices):
     return btn + label(name + "_lbl", frame, "LOOP\nALL", size=20)
 
 
-SYNC_ALL_SCRIPT = r"""
--- SYNC on the ALL page: the root script picks the master (the first player
--- that's playing) and sends it /sync
+NOTIFY_SCRIPT = r"""
+-- ALL page: the root script decides which player gets this (see %(key)s
+-- in its onReceiveNotify)
 function onValueChanged(key)
-  if key == 'x' and self.values.x >= 1 then root:notify('sync') end
+  if key == 'x' and self.values.x >= 1 then root:notify('%(key)s') end
 end
 """
 
 
-def sync_all_button(name, frame):
+def notify_button(name, frame, text, color, key):
+    """An ALL page button handled by the root script (SYNC, LOCK), which picks
+    the player to send it to."""
     btn = node("BUTTON", [
         prop("s", "name", name),
         prop("r", "frame", frame),
-        prop("c", "color", PINK),
+        prop("c", "color", color),
         prop("i", "buttonType", 0),
-        prop("s", "script", SYNC_ALL_SCRIPT),
+        prop("s", "script", NOTIFY_SCRIPT % {"key": key}),
     ], [value("x", 0)])
-    return btn + label(name + "_lbl", frame, "SYNC", size=20)
+    return btn + label(name + "_lbl", frame, text, size=20)
+
+
+def trigger_button(name, frame, text, color, path, conn):
+    """A button that sends `path` with no arguments, once per tap."""
+    btn = node("BUTTON", [
+        prop("s", "name", name),
+        prop("r", "frame", frame),
+        prop("c", "color", color),
+        prop("i", "buttonType", 0),
+    ], [value("x", 0)], [osc(path, [], conn, trigger="RISE")])
+    return btn + label(name + "_lbl", frame, text, size=20)
+
+
+def sync_buttons(p, devices, conn, sync_frame, lock_frame):
+    """SYNC (line every player up once) and LOCK (keep them in step). On a
+    player page they go to that player; on the ALL page the root script picks
+    the master."""
+    if len(devices) > 1:
+        return [notify_button(p + "sync", sync_frame, "SYNC", PINK, "sync"),
+                notify_button(p + "lock", lock_frame, "LOCK\nOFF", PINK, "lock")]
+    return [button(p + "sync", sync_frame, "SYNC", PINK, "/sync", conn),
+            trigger_button(p + "lock", lock_frame, "LOCK\nOFF", PINK, "/sync/lock", conn)]
 
 
 def fader(name, frame, color, messages=(), interactive=True, default=0):
@@ -459,18 +531,13 @@ def controls(p, devices, rows, ab_info, vol_info, quit_text):
         c.append(button(f"{p}skip{s:+d}", frame, f"{s:+d}s", GREY, "/skip", conn,
                         ("FLOAT", s)))
 
-    # Loop mode (one button: all -> one -> off), playback speed, and SYNC:
-    # every playing player jumps to the position of this page's player (on
-    # the ALL page, of the first player that's playing)
-    loop, *speeds, sync = row(*rows["loop"], n=5)
+    # Loop mode (one button: all -> one -> off), playback speed, SYNC and LOCK
+    loop, *speeds, sync, lock = row(*rows["loop"], n=6)
     c.append(loop_button(p + "loop", loop, devices))
     for frame, r in zip(speeds, [0.5, 1, 2]):
         c.append(button(f"{p}rate{r}", frame, f"SPEED\n{r}x", PURPLE, "/rate", conn,
                         ("FLOAT", r)))
-    if len(devices) > 1:
-        c.append(sync_all_button(p + "sync", sync))
-    else:
-        c.append(button(p + "sync", sync, "SYNC", PINK, "/sync", conn))
+    c += sync_buttons(p, devices, conn, sync, lock)
 
     # A-B loop: set A, set B (starts looping), clear, and a readout / note
     y, h = rows["ab"]

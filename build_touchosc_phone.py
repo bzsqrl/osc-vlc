@@ -16,9 +16,9 @@ import zlib
 from pathlib import Path
 
 from build_touchosc_layout import (
-    BASE_PORT, BG, BLUE, DEVICES, DIM_TEXT, GOLD, GREEN, GREY, PANEL, PINK, PURPLE,
+    BASE_PORT, BG, BLUE, DEVICES, DIM_TEXT, GOLD, GREEN, GREY, PANEL, PURPLE,
     RED, ROOT_SCRIPT, TEAL, TEXT, VOLUME_STEP, button, connections, fader, label,
-    loop_button, node, osc, partial, prop, quit_button, sync_all_button, value,
+    loop_button, node, osc, partial, prop, quit_button, sync_buttons, value,
 )
 
 W, H = 540, 1050          # one page (portrait); plus the tab bar: 540 x 1110
@@ -57,15 +57,12 @@ def controls(p, devices, y, sizes, last_row):
     c.append(button(p + "toggle", (X0 + side + GAP, top, X1 - X0 - 2 * (side + GAP), h),
                     "PLAY / PAUSE", GREEN, "/toggle", conn))
     c.append(button(p + "next", (X1 - side, top, side, h), ">>\nNEXT", BLUE, "/next", conn))
-    # ... then restart, stop and sync
-    restart, stop, sync = row(*next_row("transport2"), n=3)
+    # ... then restart, stop, sync and lock
+    restart, stop, sync, lock = row(*next_row("transport2"), n=4)
     c.append(button(p + "restart", restart, "RESTART\nVIDEO", GREY, "/seek", conn,
                     ("FLOAT", 0)))
     c.append(button(p + "stop", stop, "STOP", RED, "/stop", conn))
-    if len(devices) > 1:
-        c.append(sync_all_button(p + "sync", sync))
-    else:
-        c.append(button(p + "sync", sync, "SYNC", PINK, "/sync", conn))
+    c += sync_buttons(p, devices, conn, sync, lock)
 
     # Skip back / forward
     skips = [-60, -20, -5, 5, 20, 60]

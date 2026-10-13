@@ -47,7 +47,10 @@ OSC address map (all arguments optional unless noted):
                              (default: --reply-port)
     /sync                    line up every player on the network with this
                              one: same position, and playing or paused like it
-    /sync/prepare, /sync/go  sent between players by /sync (see class Sync)
+    /sync/lock   [int]       1 = keep every other player in step with this one
+                             (by small speed changes), 0 = stop, none = switch
+    /sync/prepare, /sync/go, /sync/beat, /sync/unlock
+                             sent between players by /sync and /sync/lock
     /quit                    shut down the player
 
 GPIO controls (BCM pin numbers, override with --pin-* options):
@@ -67,6 +70,7 @@ GPIO controls (BCM pin numbers, override with --pin-* options):
 import argparse
 import ctypes
 import functools
+import math
 import os
 import re
 import subprocess
@@ -125,6 +129,37 @@ SYNC_ADDRESS = "255.255.255.255"
 # How long /sync holds every player paused before they play again. Long enough
 # for the slowest player to jump; on a Pi 4 a jump in 4K HEVC can take ~1 s.
 SYNC_HOLD_SECONDS = 1.5
+
+# SYNC LOCK: the master sends its position every LOCK_BEAT_SECONDS (one small
+# message), and every other player nudges its speed to stay in step with it.
+LOCK_BEAT_SECONDS = 1.0
+LOCK_TIMEOUT = 5.0        # no word from the master this long: back to normal speed
+LOCK_RANGE = 1.0          # further apart than this (s): leave it to SYNC
+LOCK_SAMPLES = 8          # judge the offset from this many recent messages
+LOCK_MIN_CHANGE = 3.0     # change speed at most this often (s)
+LOCK_SETTLED = 0.02       # within this (s): normal speed
+LOCK_DEADBAND = 0.05      # start correcting beyond this (s)
+LOCK_FAR = 0.15           # beyond this (s): correct at the larger step
+LOCK_STEPS = (0.01, 0.02) # speed changes: 1% (small offsets) and 2% (larger)
+
+
+def lock_error(own, master):
+    """How far ahead of the master this player is, in ms (negative: behind),
+    or None if they can't be compared. Each is (ms, playlist index, video
+    length ms). Also compares across the start of a video, for a video that
+    repeats or a playlist where one player has already moved on."""
+    ms, index, length, count = own
+    m_ms, m_index, m_length = master
+    if index == m_index:
+        error = ms - m_ms
+        if length > 0 and abs(error) > length / 2:  # one has started over already
+            error -= math.copysign(length, error)
+        return error
+    if count > 1 and length > 0 and index == (m_index - 1) % count:
+        return ms - length - m_ms  # the master is already on the next video
+    if count > 1 and m_length > 0 and m_index == (index - 1) % count:
+        return ms + m_length - m_ms  # this player is already on the next video
+    return None
 
 # USB drives: the desktop mounts them under /media/<user>/, and in Lite mode
 # install.sh's udev rule mounts them under /media/usb/. Checked this often.
@@ -449,6 +484,16 @@ class VideoController:
         self._on_end = lambda event: self._ended.set()  # keep a reference
         self.player.event_manager().event_attach(
             vlc.EventType.MediaPlayerEndReached, self._on_end)
+        # VLC reports the playback time a few times a second; the moment of each
+        # report gives the exact position at any time in between (see position_now)
+        self._tick = None             # (monotonic time, playback ms) of the last report
+        self._jumped_at = 0.0         # last seek / change of video: reports unsettled
+        self._wrapped = threading.Event()  # a repeating video started over
+        self.player.event_manager().event_attach(
+            vlc.EventType.MediaPlayerTimeChanged, self._on_time)
+        self._repeating = False       # the current video repeats inside VLC
+        self.user_rate = 1.0          # playback speed chosen with /rate
+        self.correction = 1.0         # x user_rate: SYNC LOCK's small adjustment
 
         self.loop_mode = None
         self.loop(loop_mode)
@@ -484,6 +529,8 @@ class VideoController:
         old = self.medias
         self.files = files
         self.medias = [self.instance.media_new(f) for f in files]
+        old_repeat, self._repeat_medias = getattr(self, "_repeat_medias", {}), {}
+        old = old + list(old_repeat.values())
         self.formats = [None] * len(files)  # (codec, w, h, fps) per file, once probed
         self.index = 0
         self._checked_index = None  # last playlist index checked against the board
@@ -528,8 +575,35 @@ class VideoController:
                 self._new_window = True  # stopping closes the video window
         self.index = index
         self._output_open = True
-        self.player.set_media(self.medias[index])
+        self._jumped_at = time.monotonic()
+        self._wrapped.clear()
+        # A video that plays over and over (loop "one", or a playlist of one)
+        # repeats inside VLC: much quicker than opening the file again, so the
+        # restart costs less time, and the same time on every player
+        self._repeating = self._repeat_wanted()
+        self.player.set_media(self._repeat_media(index) if self._repeating
+                              else self.medias[index])
         self.player.play()
+
+    def _repeat_wanted(self):
+        return self.loop_mode == "one" or (self.loop_mode == "all" and len(self.medias) == 1)
+
+    def _repeat_media(self, index):
+        if index not in self._repeat_medias:
+            media = self.instance.media_new(self.files[index])
+            # VLC counts the repeats; when they run out (after days) the video
+            # ends normally and _check_end() starts it again
+            media.add_option(":input-repeat=65535")
+            self._repeat_medias[index] = media
+        return self._repeat_medias[index]
+
+    def _on_time(self, event):
+        # Called on a VLC thread: only note the time (taking self.lock here
+        # could deadlock against VLC calls made while holding it)
+        now, ms = time.monotonic(), event.u.new_time
+        last, self._tick = self._tick, (now, ms)
+        if last and ms < last[1] - 1000 and now - self._jumped_at > 1.0:
+            self._wrapped.set()  # the time went back by itself: it started over
 
     def _step(self, delta, wrap):
         """Index `delta` videos from the current one, or None at the end of the list."""
@@ -617,6 +691,17 @@ class VideoController:
     @locked
     def _check_end(self):
         """When a video has played to the end, move on as the loop mode says."""
+        if self._wrapped.is_set():
+            self._wrapped.clear()
+            # A video repeating inside VLC just started over. If the loop mode
+            # has changed since, treat it as the end of the video instead.
+            if self._repeating and not self._repeat_wanted():
+                index = self._step(1, wrap=self.loop_mode == "all")
+                if index is None:
+                    self.stop()  # loop mode "none": the last video has finished
+                else:
+                    self._play_index(index)
+            return
         if not self._ended.is_set():
             return
         self._ended.clear()
@@ -638,7 +723,7 @@ class VideoController:
             ms = min(ms, length - 1)
         self.player.set_time(ms)
         self._seek_target = ms
-        self._seek_at = time.monotonic()
+        self._seek_at = self._jumped_at = time.monotonic()
 
     @locked
     def skip(self, seconds):
@@ -648,6 +733,7 @@ class VideoController:
     @locked
     def position(self, pos):
         self._clear_seek()
+        self._jumped_at = time.monotonic()
         self.player.set_position(min(max(float(pos), 0.0), 1.0))
 
     # --- sync ------------------------------------------------------------------
@@ -685,6 +771,33 @@ class VideoController:
     def sync_resume(self):
         if self.player.get_state() == vlc.State.Paused:
             self.player.set_pause(0)
+
+    @locked
+    def position_now(self):
+        """(playback ms, playlist index, video length ms, playlist size) right
+        now, to about a millisecond, or None unless playing steadily. Projects
+        forward from VLC's last time report (they come every ~0.3 s, each one
+        exact), as get_time() itself only moves in steps."""
+        now, tick = time.monotonic(), self._tick
+        if (self.player.get_state() != vlc.State.Playing or tick is None
+                or now - self._jumped_at < 1.0 or now - tick[0] > 1.0):
+            return None
+        ms = tick[1] + (now - tick[0]) * 1000 * self.user_rate * self.correction
+        return ms, self.index, self.player.get_length(), len(self.medias)
+
+    @locked
+    def set_correction(self, correction):
+        """SYNC LOCK: play this much faster / slower than the chosen speed."""
+        if correction != self.correction:
+            self.correction = correction
+            self.player.set_rate(self.user_rate * correction)
+
+    @locked
+    def heavy_video(self):
+        """True for video near the decoder's limit (4K at 50 fps or more), where
+        playing faster than normal risks dropped frames."""
+        fmt = self._format(self.index) if self.medias else None
+        return bool(fmt) and fmt[1] * fmt[2] * fmt[3] >= 3840 * 2160 * 48
 
     # --- A-B loop ----------------------------------------------------------
 
@@ -819,7 +932,8 @@ class VideoController:
 
     @locked
     def rate(self, rate):
-        self.player.set_rate(float(rate))
+        self.user_rate = float(rate)
+        self.player.set_rate(self.user_rate * self.correction)
 
     @locked
     def loop(self, mode):
@@ -909,7 +1023,7 @@ class VideoController:
         with self.lock:
             self.player.stop()
             self.player.release()
-            for media in self.medias:
+            for media in self.medias + list(self._repeat_medias.values()):
                 media.release()
             self.instance.release()
 
@@ -971,7 +1085,11 @@ class Sync:
     decodes from the last keyframe), so the master then waits `hold` seconds
     for all of them to finish, and sends /sync/go: every player starts playing
     again at once. If the master was paused, they all stay paused instead.
-    Nothing is adjusted afterwards, until /sync is sent again."""
+
+    SYNC LOCK (/sync/lock) keeps them in step afterwards. The master sends its
+    exact position once a second (/sync/beat); every other player compares it
+    with its own and, if it's drifted more than LOCK_DEADBAND, plays 1-2%
+    faster or slower until it's back in step. No jumps."""
 
     REPEAT = 3        # each message is sent this many times, in case one is lost
     GIVE_UP = 3.0     # a player resumes by itself if /sync/go is this late
@@ -991,13 +1109,26 @@ class Sync:
         self.timer = None
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # SYNC LOCK
+        self.lock_state = threading.Lock()
+        self.leading = False      # this player is the lock's master
+        self.master = None        # the master this player follows, if any
+        self.master_seen = 0.0
+        self.samples = []         # (own_shift() then, seconds ahead of the master then)
+        self.shift = (0.0, time.monotonic(), 0.0)  # see own_shift()
+        self.changed_at = 0.0     # last change of speed
+        self.offset = None        # best estimate of that, for the status display
+        self.far = False
+        self.closing = threading.Event()
+        self.beat_thread = threading.Thread(target=self._beat_loop, daemon=True)
+        self.beat_thread.start()
 
-    def _send(self, path, *args):
+    def _send(self, path, *args, repeat=REPEAT):
         builder = OscMessageBuilder(path)
         for arg in args:
             builder.add_arg(arg, "i" if isinstance(arg, int) else "s")
         message = builder.build().dgram
-        for _ in range(self.REPEAT):
+        for _ in range(repeat):
             for address in self.addresses:
                 try:
                     self.sock.sendto(message, (address, self.port))
@@ -1076,7 +1207,153 @@ class Sync:
         if sender != self.id:
             self._go(sync_round)
 
+    # --- SYNC LOCK ---------------------------------------------------------
+
+    def set_lock(self, state=None):
+        """/sync/lock [1|0]: make this player the master that the others keep
+        in step with, or stop. No argument: switch over."""
+        with self.lock_state:
+            on = not self.leading if state is None else bool(int(float(state)))
+            if on == self.leading:
+                return
+            self.leading = on
+            if on:
+                self._follow_stop()
+        if on:
+            print("lock: on, this player is the master; the others keep in step with it")
+            self._beat()
+        else:
+            self._send("/sync/unlock", self.id)
+            print("lock: off")
+
+    def _beat_loop(self):
+        while not self.closing.wait(LOCK_BEAT_SECONDS):
+            if self.leading:
+                self._beat()
+            elif self.master and time.monotonic() - self.master_seen > LOCK_TIMEOUT:
+                print("lock: no word from the master, back to normal speed")
+                with self.lock_state:
+                    self._follow_stop()
+
+    def _beat(self):
+        position = self.ctrl.position_now()
+        if position is None:  # paused, or just jumped: nothing to compare with
+            self._send("/sync/beat", -1, -1, -1, self.id, repeat=1)
+        else:
+            ms, index, length, _ = position
+            self._send("/sync/beat", int(ms), index, int(length), self.id, repeat=1)
+
+    def _follow_stop(self):
+        """Stop following (call with lock_state held)."""
+        self.master = None
+        self._reset()
+
+    def _reset(self, far=False):
+        self.samples.clear()
+        self.offset = None
+        self.far = far
+        self._set_correction(1.0)
+
+    def own_shift(self, now):
+        """Seconds this player has gained on the master through its own speed
+        corrections so far. A past offset plus the shift since then is the
+        offset now, so earlier messages stay useful after a change of speed."""
+        total, since, per_second = self.shift
+        return total + per_second * (now - since)
+
+    def _set_correction(self, correction):
+        now = time.monotonic()
+        if correction != self.ctrl.correction:
+            self.changed_at = now
+        self.shift = (self.own_shift(now), now, (correction - 1) * self.ctrl.user_rate)
+        self.ctrl.set_correction(correction)
+
+    def follow_unlock(self, addr, *args):
+        sender = str(args[0]) if args else ""
+        with self.lock_state:
+            if sender and sender == self.master:
+                print("lock: off (by the master), back to normal speed")
+                self._follow_stop()
+
+    def follow_beat(self, addr, *args):
+        try:
+            ms, index, length, sender = int(args[0]), int(args[1]), int(args[2]), str(args[3])
+        except (IndexError, TypeError, ValueError):
+            print(f"{addr}: expected time, index, length and sender, got {args}")
+            return
+        if sender == self.id:
+            return
+        now = time.monotonic()
+        with self.lock_state:
+            if self.leading:
+                self.leading = False  # another player is the master now
+                print(f"lock: {sender} is the master now")
+            if sender != self.master:
+                print(f"lock: keeping in step with {sender}")
+                self.master = sender
+                self._reset()
+            self.master_seen = now
+            own = self.ctrl.position_now()
+            if ms < 0 or own is None:
+                self._reset()  # one of them is paused, or has just jumped
+                return
+            error = lock_error(own, (ms, index, length))
+            if error is None or abs(error) > LOCK_RANGE * 1000:
+                if not self.far:
+                    print("lock: too far from the master to catch up by speed; press SYNC")
+                self._reset(far=True)
+                return
+            self.far = False
+            shift = self.own_shift(now)
+            self.samples = (self.samples + [(shift, error / 1000)])[-LOCK_SAMPLES:]
+            if len(self.samples) < 3:
+                return
+            # A message only ever arrives late (Wi-Fi can hold one back), which
+            # makes this player look further ahead than it is, so trust the
+            # smallest of the recent offsets, each brought up to now
+            offset = min(e + shift - then for then, e in self.samples)
+            self.offset = offset
+            if now - self.changed_at >= LOCK_MIN_CHANGE:
+                self._correct(offset)
+
+    def _correct(self, offset):
+        current = self.ctrl.correction
+        size = abs(offset)
+        if size <= LOCK_SETTLED:
+            step = 0.0
+        elif size < LOCK_DEADBAND:
+            # in between: carry on if already correcting the right way
+            step = abs(1 - current) if (current - 1) * offset < 0 else 0.0
+        elif size < LOCK_FAR:
+            step = LOCK_STEPS[0]
+        else:
+            step = LOCK_STEPS[1]
+        if offset < 0 and self.ctrl.heavy_video():
+            step = min(step, LOCK_STEPS[0])  # don't push the decoder past its limit
+        target = round(1 - math.copysign(step, offset), 3) if step else 1.0
+        if target != current:
+            self._set_correction(target)
+            where = "ahead of" if offset > 0 else "behind"
+            print(f"lock: {abs(offset):.3f}s {where} the master, playing at "
+                  f"{target * 100:g}% speed" if step else
+                  f"lock: in step with the master ({offset:+.3f}s), normal speed")
+
+    def lock_status(self):
+        """For /status: 'off', 'master', 'waiting', 'far', or the offset from
+        the master in seconds (e.g. '+0.031')."""
+        with self.lock_state:
+            if self.leading:
+                return "master"
+            if not self.master:
+                return "off"
+            if self.far:
+                return "far"
+            return "waiting" if self.offset is None else f"{self.offset:+.3f}"
+
     def close(self):
+        self.closing.set()
+        if self.leading:
+            self._send("/sync/unlock", self.id)  # let the others go back to normal
         with self.lock:
             if self.timer:
                 self.timer.cancel()
@@ -1146,6 +1423,9 @@ def build_dispatcher(ctrl, reply_port, shutdown, sync):
         if args and isinstance(args[0], (int, float)) and 1 <= int(args[0]) <= 65535:
             port = int(args[0])
         status = ctrl.status()
+        loop = status.pop("loop")
+        status["lock"] = sync.lock_status()
+        status["loop"] = loop  # keep last: the TouchOSC layout redraws on it
         client = SimpleUDPClient(client_address[0], port)
         for key, value in status.items():
             client.send_message(f"/status/{key}", value)
@@ -1156,6 +1436,9 @@ def build_dispatcher(ctrl, reply_port, shutdown, sync):
     trigger("/sync", sync.lead)
     dispatcher.map("/sync/prepare", sync.follow_prepare)
     dispatcher.map("/sync/go", sync.follow_go)
+    value("/sync/lock", sync.set_lock, optional=True)
+    dispatcher.map("/sync/beat", sync.follow_beat)
+    dispatcher.map("/sync/unlock", sync.follow_unlock)
     dispatcher.set_default_handler(lambda addr, *args: print(f"unhandled: {addr} {args}"))
     return dispatcher
 
