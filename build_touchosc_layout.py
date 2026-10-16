@@ -73,6 +73,11 @@ local function ctl(name)
   if c == nil then
     c = root:findByName(name, true) or false
     cache[name] = c
+    -- the ALL page's player lines start from the left, so a long file name
+    -- is cut off at the right only (centred text loses both ends)
+    if c and string.match(name, '^all_dev%%d') then
+      c.properties.textAlignH = AlignH.LEFT
+    end
   end
   return c
 end
