@@ -73,9 +73,10 @@ local function ctl(name)
   if c == nil then
     c = root:findByName(name, true) or false
     cache[name] = c
-    -- the ALL page's player lines start from the left, so a long file name
-    -- is cut off at the right only (centred text loses both ends)
-    if c and string.match(name, '^all_dev%%d') then
+    -- the ALL page's player lines and each player page's file name start
+    -- from the left, so a long file name is cut off at the right only
+    -- (centred text loses both ends)
+    if c and (string.match(name, '^all_dev%%d') or string.match(name, '_lblFile$')) then
       c.properties.textAlignH = AlignH.LEFT
     end
   end
@@ -121,7 +122,7 @@ end
 
 local function refresh(n, now)
   local s, p = status[n], 'd' .. n .. '_'
-  setText('all_dev' .. n, summary(n, now))
+  setText('all_dev' .. n, ' ' .. summary(n, now))  -- a space clear of the edge
   if now - seen[n] > OFFLINE_MS then
     setText(p .. 'lblState', 'NO REPLY from player ' .. n .. ' (connection ' .. n ..
       ', receive port ' .. (BASE_PORT + n) .. ')')
@@ -129,9 +130,9 @@ local function refresh(n, now)
   end
   local index = tonumber(s.index) or -1
   if index >= 0 then
-    setText(p .. 'lblFile', string.format('%%d.  %%s', index + 1, tostring(s.file or '')))
+    setText(p .. 'lblFile', string.format(' %%d.  %%s', index + 1, tostring(s.file or '')))
   else
-    setText(p .. 'lblFile', 'no video')
+    setText(p .. 'lblFile', ' no video')
   end
   setText(p .. 'lblTime', fmt(s.time) .. ' / ' .. fmt(s.length))
   -- e.g. "pi-lobby | PLAYING | loop: ALL | aspect: ORIGINAL | lock: +0.03s"
