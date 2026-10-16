@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installer for the OSC/GPIO video player on Raspberry Pi OS (Desktop or Lite).
 #
-# Copy this folder to the Pi, then from inside it run, as your normal user
+# Get this folder onto the Pi (git clone https://github.com/bzsqrl/osc-vlc.git
+# ~/osc-vlc, or copy it), then from inside it run, as your normal user
 # (NOT with sudo; it asks for your password when it needs it):
 #
 #     bash install.sh [options]

@@ -154,19 +154,27 @@ the installer on a Pi 3 that was set up in Desktop mode by an older version of
 the installer switches it to Lite, unless you add `--desktop`.
 
 ### Quick install
-1. **Copy the player files to a folder on the Pi:** `install.sh`,
-   `osc_vlc_player.py`, `osc-vlc-player.service`, `osc-vlc-player.desktop`,
-   `osc-vlc-player-launcher.desktop` and `osc-vlc-player-stop.desktop`. Use a USB stick, or run these from a
-   Windows PowerShell prompt in the folder that has them. Replace
-   `<pi-address>` with the Pi's hostname or IP, and `pi` with your username if
-   it's different:
-   ```
-   ssh pi@<pi-address> mkdir -p osc-vlc-player
-   scp install.sh osc_vlc_player.py osc-vlc-player.service osc-vlc-player.desktop osc-vlc-player-launcher.desktop osc-vlc-player-stop.desktop pi@<pi-address>:osc-vlc-player/
-   ```
-2. **On the Pi**, open a terminal and run:
+1. **Get the player onto the Pi**, in one of two ways:
+
+   **A. Download it from GitHub** (recommended: updating later is then one
+   command). On the Pi, in a terminal or over SSH:
    ```bash
-   cd ~/osc-vlc-player
+   sudo apt install -y git
+   git clone https://github.com/bzsqrl/osc-vlc.git ~/osc-vlc
+   ```
+
+   **B. Copy it from your computer**, e.g. if the Pi isn't on the internet.
+   Copy the whole `osc-vlc` folder to your home folder on the Pi, with a USB
+   stick, or with this command from a Windows PowerShell prompt (or a
+   Linux / macOS terminal) in the folder that *contains* `osc-vlc`. Replace
+   `<pi-address>` with the Pi's hostname or IP, and `pi` with your username
+   if it's different:
+   ```
+   scp -r osc-vlc pi@<pi-address>:
+   ```
+2. **Run the installer.** On the Pi:
+   ```bash
+   cd ~/osc-vlc
    bash install.sh
    ```
 3. **Add videos** to `~/Videos` (mp4, mkv, mov, avi, m4v, webm, mpg, ts, wmv),
@@ -180,6 +188,12 @@ the installer switches it to Lite, unless you add `--desktop`.
    unless it said a reboot is needed. With no videos yet, it waits for them.
 
 At the end, the installer prints the settings for TouchOSC (section 2).
+
+**Updating later:** if you downloaded it from GitHub (A), run
+`cd ~/osc-vlc && git pull && bash install.sh` on the Pi, or update all your
+Pis at once from your computer with
+[update_pis.sh](#updating-several-pis-at-once). If you copied it (B), copy
+the new files over the old ones, then run `bash install.sh` again.
 
 **What the installer does:**
 - **System packages:** installs any that are missing (`vlc`, `python3-venv`,
