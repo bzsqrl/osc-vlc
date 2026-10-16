@@ -15,6 +15,10 @@ Run (from a terminal on the desktop, or via osc-vlc-player.service):
     python3 osc_vlc_player.py /home/pi/show    # or any folder / files
     python3 osc_vlc_player.py clip1.mp4 clip2.mov --port 9000 --loop all
 
+Options can also go in ~/.config/osc-vlc-player/options (as on the command
+line; # starts a comment). The service uses that file for its settings, as
+install.sh replaces the service file on every update but keeps this one.
+
 USB drives: while a USB drive with videos in its top folder is plugged in, the
 player plays those instead (looking at drives mounted under /media). Plugging
 it in or pulling it out switches over straight away. --no-usb turns this off.
@@ -74,6 +78,7 @@ import functools
 import math
 import os
 import re
+import shlex
 import subprocess
 import signal
 import socket
@@ -165,6 +170,11 @@ def lock_error(own, master):
     if count > 1 and m_length > 0 and m_index == (index - 1) % count:
         return ms + m_length - m_ms  # this player is already on the next video
     return None
+
+# Extra options, read from this file as well as the command line. install.sh
+# creates it once and never overwrites it, so settings survive updates (the
+# service file itself is replaced by every install).
+OPTIONS_FILE = Path.home() / ".config" / "osc-vlc-player" / "options"
 
 # USB drives: the desktop mounts them under /media/<user>/, and in Lite mode
 # install.sh's udev rule mounts them under /media/usb/. Checked this often.
@@ -1531,6 +1541,20 @@ def setup_gpio(ctrl, args):
     return gpio
 
 
+def read_options_file():
+    """Options from OPTIONS_FILE, written as on a command line (quotes work,
+    # starts a comment). Empty if there's no file."""
+    try:
+        text = OPTIONS_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    try:
+        return shlex.split(text, comments=True)
+    except ValueError as e:  # e.g. an unclosed quote
+        print(f"warning: {OPTIONS_FILE} ignored: {e}", file=sys.stderr)
+        return []
+
+
 def init_x11_threads():
     """Make Xlib thread-safe, as the vlc app does at startup.
 
@@ -1582,6 +1606,10 @@ def main():
                         help="the port the other players listen on (default: --port)")
     parser.add_argument("--no-usb", action="store_true",
                         help="don't play videos from USB drives")
+    parser.add_argument("--no-wayland", action="store_true",
+                        help="desktop: open the video window through X11 (XWayland) "
+                             "instead of Wayland, if it doesn't appear or won't go "
+                             "fullscreen")
     parser.add_argument("--debug", action="store_true",
                         help="verbose VLC log (shows which decoder / video output is used)")
 
@@ -1599,11 +1627,17 @@ def main():
     ]:
         gpio_opts.add_argument(f"--pin-{name}", type=int, default=default,
                                help=f"{help_text} (default: {default})")
-    args = parser.parse_args()
+    file_options = read_options_file()
+    # the file's options first, so ones given on the command line win
+    args = parser.parse_args(file_options + sys.argv[1:])
+    if file_options:
+        print(f"options from {OPTIONS_FILE}: {shlex.join(file_options)}")
 
     source = PlaylistSource(args.paths, use_usb=not args.no_usb)
     files = source.scan()
 
+    if args.no_wayland and os.environ.pop("WAYLAND_DISPLAY", None):
+        print("--no-wayland: using X11 (XWayland) for the video window")
     init_x11_threads()
     vlc_args = [
         "--no-video-title-show",   # don't overlay the filename on each video

@@ -40,9 +40,8 @@ Type=simple
 # lgpio (gpiozero's backend) needs a writable working directory
 WorkingDirectory=%h
 Environment=PYTHONUNBUFFERED=1
-# Desktop only: if the video window doesn't appear or won't go fullscreen
-# under Wayland, uncomment this to make VLC use XWayland instead:
-#UnsetEnvironment=WAYLAND_DISPLAY
+# Player options: put them in ~/.config/osc-vlc-player/options rather than
+# on the ExecStart line, as install.sh replaces this file on every update.
 ExecStart=%h/venv/bin/python %h/osc_vlc_player.py %h/Videos
 Restart=on-failure
 RestartSec=5

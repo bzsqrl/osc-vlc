@@ -7,8 +7,8 @@ rotary encoder.
 
 - **Playback control:** play/pause, previous/next, seek, skip, scrub, speed,
   volume, loop modes and A-B loops.
-- **Ready-made TouchOSC layout:** controls up to 10 Pis, one page each, plus a
-  page that controls them all at once.
+- **Ready-made TouchOSC layouts** for tablets and phones: control up to 10
+  Pis, one page each, plus a page that controls them all at once.
 - **Hardware controls:** GPIO buttons and a rotary encoder for seeking.
 - **Sync:** one button lines up every Pi on the network on the same playback
   position, and LOCK keeps them in step with gentle speed adjustments.
@@ -19,7 +19,8 @@ rotary encoder.
   (Lite) for smooth playback on older Pis.
 - **Pi models:** works on every model from the Pi Zero to the Pi 5, and warns in the log about
   videos a model can't decode smoothly.
-- **One-step install:** run `bash install.sh` on the Pi.
+- **Easy install and updates:** clone it from GitHub and run `bash install.sh`
+  on the Pi; update every Pi at once from your computer with `update_pis.sh`.
 
 ## Find it fast
 | I want to... | Go to |
@@ -38,6 +39,7 @@ rotary encoder.
 | Wire up buttons or a rotary encoder | [Hardware controls](#4-hardware-controls-optional) |
 | Know which videos play smoothly on my Pi | [Pi models and video formats](#5-raspberry-pi-models-and-video-formats) |
 | Convert videos to a format that plays well | [Converting videos](#converting-videos) |
+| Change a setting (picture shape, loop mode, sound output...) | [Player settings](#player-settings) |
 | See the player's log | [Useful commands](#useful-commands) |
 | Fix: no picture | [Lite mode](#lite-mode-no-picture) / [Desktop mode](#desktop-mode-no-picture-or-not-fullscreen) |
 | Fix: wrong resolution or colour ghosting | [Wrong resolution...](#wrong-resolution-low-resolution-picture-or-colour-ghosting) |
@@ -58,6 +60,7 @@ rotary encoder.
   - [Manual install](#manual-install)
   - [Updating several Pis at once](#updating-several-pis-at-once)
   - [Useful commands](#useful-commands)
+  - [Player settings](#player-settings)
   - [Troubleshooting](#troubleshooting)
     - [Which mode is it running in?](#which-mode-is-it-running-in)
     - [Lite mode: no picture](#lite-mode-no-picture)
@@ -225,6 +228,9 @@ the new files over the old ones, then run `bash install.sh` again.
   entry to `~/.config/autostart/` and the menu entries for starting and
   stopping it to `~/.local/share/applications/`. It removes any Windows line
   endings on the way.
+- **Player settings:** creates `~/.config/osc-vlc-player/options` with
+  commented examples, if it doesn't exist yet (see
+  [Player settings](#player-settings)). It never changes it after that.
 - **Python:** creates `~/venv` (or fixes an existing one so it can see
   gpiozero) and installs `python-osc` and `python-vlc` into it.
 - **Start:** starts the player right away (in Desktop mode, only when run
@@ -237,11 +243,13 @@ the new files over the old ones, then run `bash install.sh` again.
 | `--desktop` | Use Desktop mode |
 | `--desktop-icon` | Desktop mode: also put the start and stop icons on the desktop |
 | `--no-4k60` | Pi 4 / 400: don't turn on 4K 60 Hz output (see *What the installer does*) |
+| `--4k60` | Pi 4 / 400: turn on 4K 60 Hz output even if `config.txt` says `hdmi_enable_4kp60=0` |
 | `--no-system` | Skip everything that needs `sudo` |
-| `--uninstall` | Remove the player. Keeps `~/Videos`, `~/venv` and the system settings |
+| `--uninstall` | Remove the player, its settings, the USB-mount rule and the Wi-Fi setting. Keeps `~/Videos`, `~/venv` and the boot / screen blanking settings |
+| `-h`, `--help` | Show these options |
 
-**To update** after changing any of the files, copy the folder over again and
-rerun `bash install.sh`. It's safe to run as often as you like.
+The installer is safe to run as often as you like, e.g. after every update.
+It keeps your [player settings](#player-settings).
 
 ### Playing from a USB drive
 Like [Raspberry Pi Video Looper](https://videolooper.de/), the player can play
@@ -264,8 +272,8 @@ e.g. `loaded 3 video(s) from USB drive /media/usb/sda1:`.
 How it finds the drive: in Desktop mode the desktop mounts drives under
 `/media/<your username>/`; in Lite mode the installer's udev rule mounts them,
 read-only, under `/media/usb/`. The player plays from any drive mounted under
-`/media`. To turn this off, add `--no-usb` to the end of the `ExecStart=` line
-in the service file (see [Picture shape](#picture-shape) for how).
+`/media`. To turn this off, add `--no-usb` to the
+[player settings](#player-settings).
 
 ### Adding or removing videos
 To change the videos without restarting the player, press **STOP** in
@@ -294,8 +302,10 @@ It only restarts by itself after a crash.
 
 **To start it again in Desktop mode**, choose **Sound & Video → Video Player (OSC)** from the
 menu, or double-click the desktop icon if you installed it with
-`--desktop-icon`. If the player is already running, this restarts it, which is
-also how to pick up newly added videos. When you double-click a desktop icon,
+`--desktop-icon`. If the player is already running, this restarts it. (To
+pick up new videos without restarting, see
+[Adding or removing videos](#adding-or-removing-videos).) When you
+double-click a desktop icon,
 the file manager may ask whether to execute it.
 To stop it asking, turn on *Don't ask options on launch executable file* in
 File Manager → Edit → Preferences.
@@ -334,11 +344,19 @@ sudo install -m 644 99-osc-vlc-usb.rules /etc/udev/rules.d/
 ```
 Then reboot.
 
+Optional, in either mode (the installer does these too):
+```bash
+# Wi-Fi: turn off power saving, which delays incoming messages
+printf '[connection]\nwifi.powersave = 2\n' | sudo tee /etc/NetworkManager/conf.d/osc-vlc-wifi-powersave.conf
+# Pi 4 / 400: allow 4K at 60 Hz on HDMI 0
+printf '\n[all]\nhdmi_enable_4kp60=1\n' | sudo tee -a /boot/firmware/config.txt
+```
+
 ### Updating several Pis at once
 `update_pis.sh` updates every Pi from your computer in one go: on each one it
 runs `git pull` in the player folder, then `bash install.sh`, then restarts
-the player so the new version is running (all Pis at the same time). It runs in WSL (Ubuntu on Windows), Linux or macOS, and needs
-`sshpass`:
+the player so the new version is running (all Pis at the same time). It runs
+in WSL (Ubuntu on Windows), Linux or macOS, and needs `sshpass`:
 ```bash
 sudo apt install sshpass
 ```
@@ -362,7 +380,8 @@ sudo apt install sshpass
 
 To update only some of them, name them: `bash update_pis.sh 192.168.1.52`.
 If an update changed boot settings (e.g. the first install, or switching to
-Lite mode), the summary says the Pi needs a reboot to apply them. To reboot
+Lite mode), the summary says the Pi needs a reboot to apply them. Your
+[player settings](#player-settings) are kept. To reboot
 every Pi instead of restarting the player, add `--reboot`
 (`bash update_pis.sh --reboot`); only Pis whose update succeeded are
 rebooted. In Desktop mode the player is restarted on the desktop, so the
@@ -382,6 +401,47 @@ systemctl --user start osc-vlc-player        # start again
 journalctl --user -u osc-vlc-player -f       # live log of every command received
 hostname -I                                  # the Pi's IP address, for TouchOSC
 ```
+
+### Player settings
+The player's settings are options in the file
+`~/.config/osc-vlc-player/options`, which the installer creates with
+commented examples. Updates (`install.sh`, `update_pis.sh`) never change it.
+To change a setting:
+1. Open the file on the Pi: `nano ~/.config/osc-vlc-player/options`
+2. Add the option on a line of its own, or remove the `#` in front of one of
+   the examples. Lines starting with `#` are ignored. For example:
+   ```
+   --aspect off
+   --sync-hold 2.5
+   ```
+3. Save (Ctrl+O, Enter, Ctrl+X) and restart the player:
+   `systemctl --user restart osc-vlc-player`
+
+The log's first lines show the options it read, e.g.
+`options from /home/pi/.config/osc-vlc-player/options: --aspect off`.
+
+| Option | Effect |
+|---|---|
+| `--aspect off` | Keep each video's own shape, with black bars (default: stretch to fill the screen) |
+| `--aspect 16:10` | Stretch to fill a screen of this shape (default: detected; see [Picture shape](#picture-shape)) |
+| `--loop one` / `--loop none` | Start up repeating the current video / playing the playlist once (default: `all`, loop the playlist) |
+| `--no-autoplay` | Don't start playing at startup; wait for PLAY |
+| `--windowed` | Desktop mode: start in a window instead of fullscreen |
+| `--no-usb` | Don't play videos from USB drives |
+| `--clean-switch always` / `never` | When to restart VLC's video output between videos (see [Crashes when changing to a video in a different format](#crashes-when-changing-to-a-video-in-a-different-format)) |
+| `--sync-hold 2.5` | SYNC: how long (seconds) every player pauses before they play again (default 1.5) |
+| `--sync-address ADDRESS` | SYNC / LOCK: send to this address instead of the whole network; repeat for each player |
+| `--sync-port 9000` | SYNC / LOCK: the port the other players listen on (default: the same as `--port`) |
+| `--no-wayland` | Desktop mode: open the video window through X11 (XWayland) instead of Wayland |
+| `--vlc-args "..."` | Extra options for VLC itself, e.g. `--vlc-args "--alsa-audio-device=hw:CARD=vc4hdmi0"` |
+| `--port 9000` | Port the player listens on for OSC (default 9000) |
+| `--reply-port 9001` | Port `/status` replies go to when no port is given (default 9001) |
+| `--no-gpio` | Turn off the GPIO buttons and encoder |
+| `--pin-play 17` ... | Change a GPIO pin (see [Hardware controls](#4-hardware-controls-optional)) |
+| `--debug` | Detailed VLC log (which decoder and video output it uses) |
+
+The full list: `~/venv/bin/python ~/osc_vlc_player.py --help`.
+
 ### Troubleshooting
 Each problem below has its own heading, so it shows in the [contents](#contents).
 
@@ -396,12 +456,12 @@ VLC couldn't open the screen to show it`. Usually the desktop is still
 running (e.g. right after switching with `--lite`): reboot. While the desktop
 is up, VLC can't use the screen. In Lite mode the player always uses VLC's
 direct output (`drm_vout`); to try a different one, add e.g.
-`--vlc-args "--vout=any"` to the `ExecStart=` line.
+`--vlc-args "--vout=any"` to the [player settings](#player-settings).
 
 #### Desktop mode: no picture, or not fullscreen
-Edit `~/.config/systemd/user/osc-vlc-player.service`,
-remove the `#` from `#UnsetEnvironment=WAYLAND_DISPLAY`, then run
-`systemctl --user daemon-reload` and restart the player.
+Add `--no-wayland` to the [player settings](#player-settings) and restart the
+player. VLC then opens its window through X11 (XWayland), which works better
+with some setups.
 
 #### Doesn't start at login
 Add this line to `~/.config/labwc/autostart`:
@@ -432,8 +492,7 @@ Videos are stretched to fill the whole screen. The player
 detects the screen resolution at startup; the log shows e.g.
 `stretching videos to fill the screen (aspect 1920:1200)`. To set the ratio
 by hand, or to keep black bars instead, add `--aspect 16:10` or `--aspect off`
-to the end of the `ExecStart=` line in the service file, then run
-`systemctl --user daemon-reload` and restart the player. If the picture ever
+to the [player settings](#player-settings). If the picture ever
 goes back to black bars, press **FILL SCREEN** in TouchOSC (or send
 `/aspect fill`) to stretch it again.
 
@@ -445,9 +504,10 @@ starts fresh. The log shows `format change (...): restarting video output`,
 and the desktop (or, in Lite mode, the black text console) shows for a
 moment while the video output restarts. Videos in
 the same format still switch seamlessly. To restart the output on *every*
-change, add `--clean-switch always` to the end of the `ExecStart=` line
-(as for `--aspect` above). To never restart it, add `--clean-switch never`.
-Matching all your videos' formats avoids the flash entirely; see section 5.
+change, add `--clean-switch always` to the
+[player settings](#player-settings); to never restart it,
+`--clean-switch never`. Matching all your videos' formats avoids the flash
+entirely; see [section 5](#5-raspberry-pi-models-and-video-formats).
 
 #### No sound (Desktop mode)
 Pick the output (e.g. HDMI) from the volume
@@ -456,8 +516,8 @@ icon on the desktop taskbar.
 #### No sound (Lite mode)
 VLC uses the Pi's default sound output. List the
 outputs with `aplay -l`, then choose one by adding e.g.
-`--vlc-args "--alsa-audio-device=hw:CARD=vc4hdmi0"` to the `ExecStart=`
-line, using a card name from that list.
+`--vlc-args "--alsa-audio-device=hw:CARD=vc4hdmi0"` to the
+[player settings](#player-settings), using a card name from that list.
 
 #### USB drive not played
 Check the videos are in the drive's top folder.
@@ -502,16 +562,18 @@ There are two, with the same controls and pages:
 
 Open one in TouchOSC (File → Open), set up the connections as above, and press
 Play. Each has a tab for each page along the top:
-- **ALL:** every button and fader goes to all 10 players at once. Instead of
-  the full status panel it shows one line per player: play state, time and
-  video, or `not connected` / `NO REPLY`.
+- **ALL:** every button and fader goes to all 10 players at once, except
+  SYNC and LOCK, which pick one player as the master. Instead of the full
+  status panel it shows one line per player: play state, time and video, or
+  `not connected` / `NO REPLY`.
 - **1 to 10:** one page per player, each with the full set of controls below,
   going to that player only. If a page says `NO REPLY`, check that
   connection's host and receive port.
 
 Each page has:
 - **Status panel (player pages):** current video, time / length, play state,
-  loop mode, aspect ratio, and a progress bar. Updates twice a second.
+  loop mode, aspect ratio, LOCK state, and a progress bar. Updates twice a
+  second.
 - **Scrub fader:** drag to any point in the video.
 - **Transport buttons:** previous, restart video (back to its start),
   play/pause, stop and next. PLAY / PAUSE after STOP re-reads the videos
@@ -530,8 +592,8 @@ Each page has:
   state: MASTER, its offset from the master (e.g. `+0.03s`), WAITING, TOO FAR
   or OFF.
 - **QUIT PLAYER / QUIT ALL:** quits the player(s). Tap once and the button
-  says *TAP AGAIN TO QUIT*. Tap again within 3 seconds to quit. Start the
-  player again from the Pi's menu (section 1) or by rebooting.
+  says *TAP AGAIN TO QUIT*. Tap again within 3 seconds to quit. To start the
+  player again, see [Quit and start again](#quit-and-start-again).
 - **A-B loop:** Set A, Set B and Clear buttons, with a readout of the loop
   points on the player pages. On the ALL page, each player sets the point at
   its own current time.
@@ -578,15 +640,15 @@ result:
   saving, which otherwise delays messages the most.
 - **If one player still starts late,** its jump is taking longer than the
   pause (e.g. 4K video with keyframes far apart). Make the pause longer by
-  adding e.g. `--sync-hold 2.5` to the end of the `ExecStart=` line on the
-  players (the master's setting is the one used). A shorter pause, such as
+  adding e.g. `--sync-hold 2.5` to the [player settings](#player-settings)
+  on the players (the master's setting is the one used). A shorter pause, such as
   `--sync-hold 1`, is fine for videos that jump quickly.
 
 The master sends to port 9000 at every address on the network (a broadcast).
 If your players listen on another port, or the network blocks broadcasts,
-add `--sync-port` or `--sync-address` to the end of the `ExecStart=` line (as
-for `--aspect` in section 1, [Troubleshooting](#troubleshooting)). `--sync-address` can be given
-once per player, with each player's IP address:
+add `--sync-port` or `--sync-address` to the
+[player settings](#player-settings) (on every player). `--sync-address` can
+be given once per player, with each player's IP address:
 ```
 --sync-address 192.168.1.51 --sync-address 192.168.1.52 --sync-address 192.168.1.53
 ```
@@ -701,6 +763,7 @@ press and ignores the release, so each tap acts once.
 | `/ab` | A-B loop in one button: 1st press sets A, 2nd sets B, 3rd clears |
 | `/sync` | Every player on the network jumps to this player's position, then plays or pauses like it (see [Syncing players](#syncing-players)) |
 | `/sync/lock` | Switch LOCK on / off with this player as the master (see [Keeping players in step](#keeping-players-in-step-lock)); with an integer argument, `1` = on, `0` = off |
+| `/quit` | Quit the player (the ready-made layouts ask for a second tap first) |
 
 An A-B loop plays the section between A and B over and over. It clears itself
 when the player stops or moves to another video. To set exact times from
@@ -745,7 +808,8 @@ tells the players apart. The messages are:
 `/status/state`, `/status/index`, `/status/file`, `/status/time`,
 `/status/length`, `/status/volume`, `/status/abstart`, `/status/abend`
 (A-B loop points in seconds, `-1` if not set), `/status/aspect` (the forced
-ratio, or `original`) and `/status/loop`.
+ratio, or `original`), `/status/lock` (`off`, `master`, `waiting`, `far`, or
+the offset from the master in seconds, e.g. `+0.031`) and `/status/loop`.
 To show one, give a label the matching address and turn on receiving for it.
 Values update only when `/status` is sent; they don't update continuously.
 
@@ -769,6 +833,13 @@ GND, and a KY-040's `+` goes to **3.3V**, never 5V.
 | Encoder A / CLK | 5 | 29 | Turn: seek back / forward one step |
 | Encoder B / DT | 6 | 31 | |
 | Encoder push / SW | 13 | 33 | Cycle step length: 1s → 5s → 10s → 30s |
+
+To use other pins, add e.g. `--pin-play 26` to the
+[player settings](#player-settings) (the options are `--pin-play`,
+`--pin-prev`, `--pin-next`, `--pin-loop`, `--pin-ab`, `--pin-enc-a`,
+`--pin-enc-b` and `--pin-enc-button`, with BCM GPIO numbers). To turn the
+GPIO controls off, add `--no-gpio`. Without any buttons wired up, they do no
+harm.
 
 [↑ Contents](#contents)
 
@@ -806,7 +877,8 @@ playing through the desktop drops frames on these models.
 
 **Mixing formats:** a playlist can mix formats, for example 1080p30 H.264 and
 4K60 HEVC. At each change of format, the screen briefly shows the desktop
-(or the text console in Lite mode) while VLC restarts its video output (see Troubleshooting in section 1). For
+(or the text console in Lite mode) while VLC restarts its video output (see
+[Crashes when changing to a video in a different format](#crashes-when-changing-to-a-video-in-a-different-format)). For
 seamless changes throughout, export every video with the same codec,
 resolution and frame rate.
 
@@ -842,9 +914,10 @@ screen (see [Picture shape](#picture-shape) in section 1).
   `/boot/firmware/config.txt`; reboot once after installing. Without it, 4K
   output is limited to 30 Hz. The Pi 5 doesn't need this.
 - **Pi Zero / Zero W / Zero 2 W:** 512 MB of RAM is tight for the desktop plus
-  VLC, so they use Lite mode. Keep videos to 1080p30 H.264. They have a mini-HDMI port, so you need an adapter.
-- **Pi 2, Pi 3 and the Zeros:** use Lite mode for smooth playback. It also
-  starts the video much sooner after boot.
+  VLC, so they use Lite mode. Keep videos to 1080p30 H.264. They have a
+  mini-HDMI port, so you need an adapter.
+- **Pi 2, Pi 3 and the Zeros:** the installer uses Lite mode on these, for
+  smooth playback. It also starts the video much sooner after boot.
 - **Two screens (Pi 4 / 5):** the player stretches to fit the first screen it
   finds. With two screens connected, set the ratio by hand with `--aspect`
   (section 1, [Picture shape](#picture-shape)).

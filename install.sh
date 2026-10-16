@@ -51,6 +51,8 @@ DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
 VIDEOS_DIR="$HOME/Videos"
 VENV="$HOME/venv"
 MODE_FILE="$HOME/.config/osc-vlc-player/mode"  # mode chosen with --lite / --desktop
+# the player's own settings: created once, never overwritten
+OPTIONS_FILE="$HOME/.config/osc-vlc-player/options"
 # Pi 1, 2, 3 (incl. 3B+), Zero, Zero 2 W, CM1, CM3: too slow for video on the desktop
 OLDER_PI='Pi (Model|Zero|2 |3 )|Compute Module (Rev|3)'
 # lite mode: mount USB drives (the desktop does this itself)
@@ -333,6 +335,28 @@ mkdir -p "$SERVICE_DIR" "$VIDEOS_DIR"
 put "$SRC/osc-vlc-player.service" "$SERVICE_DIR"
 note "script:      ~/osc_vlc_player.py"
 note "service:     ~/.config/systemd/user/$SERVICE"
+if [ ! -f "$OPTIONS_FILE" ]; then
+    mkdir -p "$(dirname "$OPTIONS_FILE")"
+    cat > "$OPTIONS_FILE" << 'OPTIONS'
+# Settings for the video player: options as on its command line, one or more
+# per line. Lines starting with # are ignored: remove the # to use an example.
+# Changes apply when the player restarts:
+#     systemctl --user restart osc-vlc-player
+# Updates (install.sh, update_pis.sh) keep this file. All the options are in
+# the README ("Player settings"), or run: ~/venv/bin/python ~/osc_vlc_player.py --help
+#
+# --aspect off            keep each video's own shape (black bars) instead of filling the screen
+# --aspect 16:10          fill the screen, for a screen of this shape (default: detected)
+# --loop one              repeat the current video (all = loop the playlist, none = play once)
+# --no-usb                don't play videos from USB drives
+# --sync-hold 2.5         SYNC: pause this long (s) before playing again (default 1.5)
+# --no-wayland            Desktop mode: if the video window doesn't appear or go fullscreen
+# --vlc-args "--alsa-audio-device=hw:CARD=vc4hdmi0"   Lite mode: choose the sound output
+OPTIONS
+    note "settings:    ~/.config/osc-vlc-player/options (new; kept by updates)"
+else
+    note "settings:    ~/.config/osc-vlc-player/options (yours, unchanged)"
+fi
 if [ "$MODE" = lite ]; then
     # the desktop entries would start a second copy if the desktop came back
     rm -f "$AUTOSTART_DIR/osc-vlc-player.desktop" \
