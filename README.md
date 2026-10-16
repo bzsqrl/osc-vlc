@@ -571,9 +571,11 @@ Play. Each has a tab for each page along the top:
   connection's host and receive port.
 
 Each page has:
-- **Status panel (player pages):** current video, time / length, play state,
-  loop mode, aspect ratio, LOCK state, and a progress bar. Updates twice a
-  second.
+- **Status panel (player pages):** current video, time / length, and a
+  status line with the Pi's hostname (to tell the Pis apart), play state,
+  loop mode, aspect ratio and LOCK state, e.g.
+  `pi-lobby | PLAYING | loop: ALL | aspect: ORIGINAL | lock: +0.03s`, plus a
+  progress bar. Updates twice a second.
 - **Scrub fader:** drag to any point in the video.
 - **Transport buttons:** previous, restart video (back to its start),
   play/pause, stop and next. PLAY / PAUSE after STOP re-reads the videos
@@ -684,7 +686,7 @@ The lock state shows on each player page's LOCK button and status line:
 | `MASTER` | The others keep in step with this player |
 | `+0.03s` | Following the master, 0.03 seconds ahead of it (`-` = behind) |
 | `WAITING` | Following, but this player or the master is paused, or has just jumped |
-| `TOO FAR` | More than 3 seconds from the master (the status line shows how far): too far to catch up by speed. Press SYNC |
+| `TOO FAR` | More than 3 seconds from the master (the status line shows how far, e.g. `TOO FAR (+4.20s)`): too far to catch up by speed. Press SYNC |
 | `OFF` | Not locked |
 
 Up to 3 seconds apart, a player catches up by speed alone (at 2%, a second
@@ -806,7 +808,7 @@ port 9001 with the messages below. Add an integer argument to choose another
 port: `/status 9003` replies on port 9003. This is how the ready-made layout
 tells the players apart. The messages are:
 `/status/state`, `/status/index`, `/status/file`, `/status/time`,
-`/status/length`, `/status/volume`, `/status/abstart`, `/status/abend`
+`/status/length`, `/status/volume`, `/status/host` (the Pi's hostname), `/status/abstart`, `/status/abend`
 (A-B loop points in seconds, `-1` if not set), `/status/aspect` (the forced
 ratio, or `original`), `/status/lock` (`off`, `master`, `waiting`, `far`, or
 the offset from the master in seconds, e.g. `+0.031`) and `/status/loop`.

@@ -139,7 +139,7 @@ def device_page(n):
               background=True),
         label(p + "lblState", (X0, 102, X1 - X0, 30),
               f"connection {n}: receive port {BASE_PORT + n}",
-              size=14, color=DIM_TEXT, background=True),
+              size=13, color=DIM_TEXT, background=True),
         fader(p + "progress", (X0, 140, X1 - X0, 10), TEAL, interactive=False),
     ]
     rows, y = controls(p, [n], 160, DEVICE_SIZES, lambda frame: label(

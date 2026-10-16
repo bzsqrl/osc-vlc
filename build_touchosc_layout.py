@@ -104,7 +104,7 @@ local function lockText(v, long)
   if offset then return string.format('%%+.2fs', offset) end
   local far = string.match(v, '^far(.*)$')
   if far then
-    if long and far ~= '' then return 'TOO FAR (' .. far .. 's): press SYNC' end
+    if long and far ~= '' then return 'TOO FAR (' .. far .. 's)' end
     return 'TOO FAR'
   end
   return string.upper(v)
@@ -129,8 +129,14 @@ local function refresh(n, now)
     setText(p .. 'lblFile', 'no video')
   end
   setText(p .. 'lblTime', fmt(s.time) .. ' / ' .. fmt(s.length))
-  setText(p .. 'lblState', up(s.state) .. '     loop: ' .. up(s.loop) ..
-    '     aspect: ' .. up(s.aspect) .. '     lock: ' .. lockText(s.lock, true))
+  -- e.g. "pi-lobby | PLAYING | loop: ALL | aspect: ORIGINAL | lock: +0.03s"
+  local parts = {}
+  if s.host and s.host ~= '' then parts[#parts + 1] = tostring(s.host) end
+  parts[#parts + 1] = up(s.state)
+  parts[#parts + 1] = 'loop: ' .. up(s.loop)
+  parts[#parts + 1] = 'aspect: ' .. up(s.aspect)
+  parts[#parts + 1] = 'lock: ' .. lockText(s.lock, true)
+  setText(p .. 'lblState', table.concat(parts, ' | '))
   setText(p .. 'lock_lbl', 'LOCK\n' .. lockText(s.lock))
   local volume = tonumber(s.volume) or -1
   setText(p .. 'lblVolume', 'volume: ' .. (volume >= 0 and tostring(volume) or '?'))

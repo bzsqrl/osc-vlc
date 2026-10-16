@@ -48,8 +48,8 @@ OSC address map (all arguments optional unless noted):
     /ab/clear                clear the A-B loop
     /ab                      cycle: set A -> set B -> clear
     /ab/set  <float> <float> set A and B explicitly, in seconds
-    /status      [int]       reply with state to sender, on the given port
-                             (default: --reply-port)
+    /status      [int]       reply with state (incl. this Pi's hostname) to the
+                             sender, on the given port (default: --reply-port)
     /sync                    line up every player on the network with this
                              one: same position, and playing or paused like it
     /sync/lock   [int]       1 = keep every other player in step with this one
@@ -175,6 +175,9 @@ def lock_error(own, master):
 # creates it once and never overwrites it, so settings survive updates (the
 # service file itself is replaced by every install).
 OPTIONS_FILE = Path.home() / ".config" / "osc-vlc-player" / "options"
+
+# This Pi's name, sent with /status
+HOSTNAME = socket.gethostname()
 
 # USB drives: the desktop mounts them under /media/<user>/, and in Lite mode
 # install.sh's udev rule mounts them under /media/usb/. Checked this often.
@@ -1507,6 +1510,7 @@ def build_dispatcher(ctrl, reply_port, shutdown, sync):
         status = ctrl.status()
         loop = status.pop("loop")
         status["lock"] = sync.lock_status()
+        status["host"] = HOSTNAME  # to tell the Pis apart in TouchOSC
         status["loop"] = loop  # keep last: the TouchOSC layout redraws on it
         client = SimpleUDPClient(client_address[0], port)
         for key, value in status.items():
