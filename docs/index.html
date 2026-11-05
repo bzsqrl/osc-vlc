@@ -73,10 +73,14 @@
   nav .wrap { display: flex; align-items: center; gap: 24px; height: 56px; }
   nav .brand { font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 10px; }
   nav .brand svg { width: 24px; height: 24px; }
-  nav .links { display: flex; gap: 20px; margin-left: auto; font-size: .92rem; }
+  nav .links { display: flex; align-items: center; gap: 20px; margin-left: auto; font-size: .92rem; }
   nav .links a { color: var(--muted); }
   nav .links a:hover { color: var(--text); text-decoration: none; }
-  @media (max-width: 760px) { nav .links a:not(.gh) { display: none; } }
+  @media (max-width: 760px) { nav .links a:not(.gh):not(.ai-badge) { display: none; } }
+  nav a.ai-badge { display: block; flex-shrink: 0; transition: transform 0.2s ease; }
+  nav a.ai-badge:hover { transform: scale(1.08); text-decoration: none; }
+  nav a.ai-badge img { display: block; width: 39px; height: 44px; max-width: none; }
+  @media (max-width: 420px) { nav a.ai-badge img { width: 32px; height: 36px; } }
 
   /* Hero */
   .hero { padding: 72px 0 56px; position: relative; overflow: hidden; }
@@ -200,6 +204,7 @@
 
   footer { border-top: 1px solid var(--border); padding: 32px 0; color: var(--muted); font-size: .9rem; }
   footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 24px; justify-content: space-between; }
+  footer .ai-note { flex-basis: 100%; margin: 0; }
 </style>
 </head>
 <body>
@@ -218,6 +223,7 @@
       <a href="#models">Pi models</a>
       <a href="#osc">OSC reference</a>
       <a class="gh" href="https://github.com/bzsqrl/osc-vlc">GitHub</a>
+      <a class="ai-badge" href="https://aibadge.org/" target="_blank" rel="noopener" title="Made with AI (aibadge.org)"><img src="made-with-ai.png" alt="Made with AI" width="39" height="44"></a>
     </div>
   </div>
 </nav>
@@ -523,6 +529,7 @@ bash install.sh</code></pre>
   <div class="wrap">
     <span>osc-vlc &middot; Released under the <a href="https://github.com/bzsqrl/osc-vlc/blob/main/LICENSE">MIT License</a></span>
     <span>Built on <a href="https://www.videolan.org/vlc/">VLC</a>, <a href="https://pypi.org/project/python-vlc/">python-vlc</a> and <a href="https://pypi.org/project/python-osc/">python-osc</a></span>
+    <p class="ai-note">Made with AI: osc-vlc's code and documentation were largely written with an AI coding tool (Claude Code), directed and tested by a person.</p>
   </div>
 </footer>
 
